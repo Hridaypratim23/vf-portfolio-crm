@@ -1,4 +1,4 @@
-# Vantage Fit CSM · Portfolio CRM
+# CRM TOOL
 
 > A Customer Success Management tool for a corporate wellness platform — built to demo full-stack product skills.
 
