@@ -62,8 +62,8 @@ export const onRequest = defineMiddleware(async (context, next) => {
     return applySecurityHeaders(await next());
   }
 
-  // Seed DB on first cold start if empty
-  await ensureSeeded(db);
+  // Seed DB on first cold start if empty — never crash the app if seeding fails
+  try { await ensureSeeded(db); } catch { /* seeding failure is non-fatal */ }
 
   const token = cookies.get(COOKIE_NAME)?.value;
   if (!token) {
