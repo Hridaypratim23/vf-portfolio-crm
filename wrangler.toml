@@ -1,5 +1,4 @@
 name = "vf-portfolio-crm"
-account_id = "8ab2fe266be0ec76c04bfa1ff3acb2cf"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
@@ -8,4 +7,4 @@ pages_build_output_dir = "dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "vf-portfolio-crm-db"
-database_id = "69f75519-e899-4c68-83b6-4c87374736af"
+database_id = "1c404fed-73eb-471c-b4ff-bf88b16a0df4"

@@ -1,4 +1,5 @@
 import { defineMiddleware } from 'astro:middleware';
+import { ensureSeeded } from './lib/seed';
 
 const COOKIE_NAME = 'auth_session';
 
@@ -60,6 +61,9 @@ export const onRequest = defineMiddleware(async (context, next) => {
   if (!secret || !db) {
     return applySecurityHeaders(await next());
   }
+
+  // Seed DB on first cold start if empty
+  await ensureSeeded(db);
 
   const token = cookies.get(COOKIE_NAME)?.value;
   if (!token) {
