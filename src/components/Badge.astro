@@ -1,0 +1,17 @@
+---
+interface Props { type: 'status' | 'clientType'; value: string }
+const { type, value } = Astro.props;
+
+let cls = 'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ';
+if (type === 'clientType') {
+  cls += (value === 'Subscription' || value === 'Subscription (Partnership)' || value === 'Annual')
+    ? 'bg-indigo-100 text-indigo-700'
+    : 'bg-amber-100 text-amber-700';
+} else {
+  if (value === 'Active') cls += 'bg-emerald-100 text-emerald-700';
+  else if (value?.includes('Repeat') || value?.includes('Active')) cls += 'bg-sky-100 text-sky-700';
+  else if (value === 'Churn') cls += 'bg-red-100 text-red-700';
+  else cls += 'bg-gray-100 text-gray-600';
+}
+---
+<span class={cls}>{value || '—'}</span>

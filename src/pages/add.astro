@@ -1,0 +1,949 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { currentFY } from '../lib/revenue';
+
+const fy = currentFY();
+const fyYears = Array.from({ length: 8 }, (_, i) => fy - 5 + i);
+---
+
+<BaseLayout title="Add Client">
+
+<div class="page-topbar">
+    <a href="/" class="back-link"><i class="bi bi-arrow-left"></i> Dashboard</a>
+    <div style="width:1px;height:24px;background:#eee;"></div>
+    <div>
+        <p class="page-title mb-0">Add New Client</p>
+    </div>
+</div>
+
+<!-- Hero Banner -->
+<div class="add-client-hero">
+    <div class="add-hero-glow add-hero-glow-1"></div>
+    <div class="add-hero-glow add-hero-glow-2"></div>
+    <div class="add-hero-glow add-hero-glow-3"></div>
+    <div class="add-hero-content">
+        <div class="add-hero-icon"><i class="bi bi-building-add"></i></div>
+        <div>
+            <div class="add-hero-title">Add New Client</div>
+            <div class="add-hero-sub">Fields marked <span style="color:#f47072;font-weight:700;">*</span> are required.</div>
+        </div>
+    </div>
+</div>
+
+<div class="add-form-wrap">
+
+    <div id="saveBanner" class="add-save-banner" style="display:none;"></div>
+
+    <form id="addForm" method="POST" action="/api/add">
+
+        <!-- ── Section 1: Identity ─────────────────────────── -->
+        <div class="add-section">
+            <div class="add-section-head">
+                <span class="add-section-num">01</span>
+                <span class="add-section-icon" style="background:rgba(65,216,180,0.12);color:#0ba882;"><i class="bi bi-building"></i></span>
+                <div>
+                    <div class="add-section-title">Company Identity</div>
+                    <div class="add-section-sub">Core identification details</div>
+                </div>
+            </div>
+            <div class="add-section-body">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <div class="add-field">
+                            <label class="add-label">Company ID <span class="add-required">*</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-hash add-input-icon"></i>
+                                <input type="text" name="company_id" class="add-input" placeholder="e.g. 1767" required>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-8">
+                        <div class="add-field">
+                            <label class="add-label">Company Name <span class="add-required">*</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-briefcase add-input-icon"></i>
+                                <input type="text" name="company_name" class="add-input" placeholder="Enter company name" required>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="add-field">
+                            <label class="add-label">Type <span class="add-required">*</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-diagram-3 add-input-icon"></i>
+                                <select name="type" class="add-input add-select" required>
+                                    <option value="">— Select type —</option>
+                                    <option>Annual</option>
+                                    <option>Annual (Partnership)</option>
+                                    <option>One Time</option>
+                                    <option>One Time (Repeat)</option>
+                                    <option>One Time (Partnership)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="add-field">
+                            <label class="add-label">Status <span class="add-required">*</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-activity add-input-icon"></i>
+                                <select name="status" class="add-input add-select" required>
+                                    <option value="">— Select status —</option>
+                                    <option>Active</option>
+                                    <option>Inactive</option>
+                                    <option>Active (Repeat client)</option>
+                                    <option>Inactive (Repeat)</option>
+                                    <option>Churn</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="add-field">
+                            <label class="add-label">Employee Base <span class="add-required">*</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-people add-input-icon"></i>
+                                <input type="text" name="employee_base" class="add-input" placeholder="e.g. 500" required>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="add-field">
+                            <label class="add-label">Location (Originally Contracted) <span class="add-required">*</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-geo-alt add-input-icon"></i>
+                                <input type="text" name="location" class="add-input" placeholder="e.g. India" required>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <div class="add-field">
+                            <label class="add-label">Located In <span class="add-label-hint">(Participant countries)</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-globe-asia-australia add-input-icon"></i>
+                                <input type="text" name="located_in" class="add-input" placeholder="e.g. India, UK, US">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="add-field">
+                            <label class="add-label">Region <span class="add-required">*</span></label>
+                            <div class="region-radio-group">
+                                <label class="region-radio-opt">
+                                    <input type="radio" name="region" value="India & RoW" checked>
+                                    <span class="region-radio-pill">
+                                        <i class="bi bi-globe-asia-australia me-1"></i>India &amp; RoW
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="add-field">
+                            <label class="add-label">CX POC <span class="add-required">*</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-headset add-input-icon"></i>
+                                <input type="text" name="cx_poc" class="add-input" placeholder="e.g. Riya Sharma" required>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Section 2: Timeline ─────────────────────────── -->
+        <div class="add-section">
+            <div class="add-section-head">
+                <span class="add-section-num">02</span>
+                <span class="add-section-icon" style="background:rgba(255,157,87,0.12);color:#c97a30;"><i class="bi bi-calendar3"></i></span>
+                <div>
+                    <div class="add-section-title">Agreement &amp; Campaign</div>
+                    <div class="add-section-sub">Contract dates and campaign window</div>
+                </div>
+            </div>
+            <div class="add-section-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="add-field">
+                            <label class="add-label">Agreement Start Date <span class="add-label-hint">(DD/MM/YYYY)</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-calendar-check add-input-icon"></i>
+                                <input type="text" name="agreement_start_date" class="add-input date-pick" placeholder="DD/MM/YYYY" autocomplete="off">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="add-field">
+                            <label class="add-label">Agreement End Date <span class="add-label-hint">(DD/MM/YYYY)</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-calendar-x add-input-icon"></i>
+                                <input type="text" name="agreement_end_date" class="add-input date-pick" placeholder="DD/MM/YYYY" autocomplete="off">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="add-field">
+                            <label class="add-label">Campaign Start Date <span class="add-label-hint">(DD/MM/YYYY)</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-lightning add-input-icon"></i>
+                                <input type="text" name="campaign_start_date" class="add-input date-pick" placeholder="DD/MM/YYYY" autocomplete="off">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="add-field">
+                            <label class="add-label">Campaign End Date <span class="add-label-hint">(DD/MM/YYYY)</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-lightning-charge add-input-icon"></i>
+                                <input type="text" name="campaign_end_date" class="add-input date-pick" placeholder="DD/MM/YYYY" autocomplete="off">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Section 3: Agreement Upload ────────────────── -->
+        <div class="add-section">
+            <div class="add-section-head">
+                <span class="add-section-num">03</span>
+                <span class="add-section-icon" style="background:rgba(78,115,223,0.10);color:#4e73df;"><i class="bi bi-file-earmark-text"></i></span>
+                <div>
+                    <div class="add-section-title">Agreement / Document</div>
+                    <div class="add-section-sub">Optional — attach a document at the same time</div>
+                </div>
+            </div>
+            <div class="add-section-body">
+                <div id="agr-placeholder" class="add-agr-placeholder">
+                    <i class="bi bi-cloud-upload" style="font-size:1.6rem;color:#ccc;display:block;margin-bottom:8px;"></i>
+                    <span style="font-size:0.82rem;color:#bbb;">Select a file after saving the client above</span>
+                    <button type="button" onclick="enableAgrUpload()" class="add-agr-enable-btn">
+                        <i class="bi bi-plus me-1"></i>Add a document now
+                    </button>
+                </div>
+                <div id="agr-form" style="display:none;">
+                    <div class="row g-3">
+                        <div class="col-md-5">
+                            <div class="add-field">
+                                <label class="add-label">File <span class="add-label-hint">(PDF, DOC, DOCX, XLSX)</span></label>
+                                <div class="add-input-wrap">
+                                    <i class="bi bi-paperclip add-input-icon"></i>
+                                    <input type="file" id="agrFile" name="agr_file" class="add-input"
+                                           accept=".pdf,.doc,.docx,.xlsx" style="padding-top:8px;cursor:pointer;">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="add-field">
+                                <label class="add-label">Document Type</label>
+                                <div class="add-input-wrap">
+                                    <i class="bi bi-tag add-input-icon"></i>
+                                    <select id="agrDocType" class="add-input add-select">
+                                        <option>Agreement</option>
+                                        <option>MSA</option>
+                                        <option>NDA</option>
+                                        <option>Addendum</option>
+                                        <option>Invoice</option>
+                                        <option>Other</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 d-flex align-items-end">
+                            <button type="button" onclick="cancelAgrUpload()"
+                                    class="add-cancel-btn w-100" style="justify-content:center;">
+                                <i class="bi bi-x me-1"></i>Remove
+                            </button>
+                        </div>
+                    </div>
+                    <div id="agr-status" style="margin-top:8px;font-size:0.78rem;color:#888;display:none;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Section 4: Contact ──────────────────────────── -->
+        <div class="add-section">
+            <div class="add-section-head">
+                <span class="add-section-num">04</span>
+                <span class="add-section-icon" style="background:rgba(241,81,98,0.10);color:var(--fit-red);"><i class="bi bi-person-lines-fill"></i></span>
+                <div>
+                    <div class="add-section-title">Contact Details</div>
+                    <div class="add-section-sub">POC and account information</div>
+                </div>
+            </div>
+            <div class="add-section-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="add-field">
+                            <label class="add-label">Contact Name <span class="add-required">*</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-person add-input-icon"></i>
+                                <input type="text" name="contact_name" class="add-input" placeholder="e.g. Priya Sharma" required>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="add-field">
+                            <label class="add-label">Dealspoint Account <span class="add-required">*</span></label>
+                            <div class="add-input-wrap">
+                                <i class="bi bi-link-45deg add-input-icon"></i>
+                                <input type="text" name="dealspoint_account" class="add-input" placeholder="dealspoint@company.com" required>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <div class="add-field">
+                            <label class="add-label">POC Email(s) <span class="add-required">*</span></label>
+                            <div id="email-fields" class="d-flex flex-column gap-2">
+                                <div class="add-input-wrap email-row">
+                                    <i class="bi bi-envelope add-input-icon"></i>
+                                    <input type="email" name="contact_email" class="add-input" placeholder="email@company.com" required>
+                                </div>
+                            </div>
+                            <button type="button" onclick="addEmailField()" class="add-email-more">
+                                <i class="bi bi-plus-circle me-1"></i>Add another email
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Section 5: Subscription Revenue ───────────────── -->
+        <div class="add-section">
+            <div class="add-section-head">
+                <span class="add-section-num">05</span>
+                <span class="add-section-icon" style="background:rgba(65,216,180,0.12);color:#0ba882;"><i class="bi bi-graph-up-arrow"></i></span>
+                <div>
+                    <div class="add-section-title">Subscription Revenue</div>
+                    <div class="add-section-sub">Contract value per financial year — leave blank to fill later</div>
+                </div>
+            </div>
+            <div class="add-section-body">
+                <div id="sub-history-rows" class="d-flex flex-column gap-2 mb-2"></div>
+                <div id="sub-history-empty" style="font-size:0.78rem;color:#bbb;padding:4px 0;">
+                    No entries yet — click below to add a financial year.
+                </div>
+                <button type="button" onclick="addSubRow(null,null,null,null)" class="add-email-more mt-1">
+                    <i class="bi bi-plus-circle me-1"></i>Add Financial Year
+                </button>
+            </div>
+        </div>
+
+        <!-- ── Section 6: Notes ────────────────────────────── -->
+        <div class="add-section">
+            <div class="add-section-head">
+                <span class="add-section-num">06</span>
+                <span class="add-section-icon" style="background:rgba(41,41,76,0.08);color:var(--midnight);"><i class="bi bi-journal-text"></i></span>
+                <div>
+                    <div class="add-section-title">Notes</div>
+                    <div class="add-section-sub">Any additional context or remarks</div>
+                </div>
+            </div>
+            <div class="add-section-body">
+                <div class="add-field">
+                    <div class="add-input-wrap" style="align-items:flex-start;">
+                        <i class="bi bi-pencil-square add-input-icon" style="margin-top:12px;"></i>
+                        <textarea name="notes" class="add-input" rows="4" placeholder="Add notes, context, or remarks about this client…" style="resize:vertical;"></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Submit bar ──────────────────────────────────── -->
+        <div class="add-submit-bar">
+            <a href="/" class="add-cancel-btn">
+                <i class="bi bi-x me-1"></i>Cancel
+            </a>
+            <button type="submit" id="submitBtn" class="add-submit-btn">
+                <i class="bi bi-check2-circle me-2"></i>Save Client
+            </button>
+        </div>
+
+    </form>
+</div>
+
+<style>
+.add-client-hero {
+    position: relative;
+    background: linear-gradient(135deg, #1a1a2e 0%, #29294C 60%, #1e2a45 100%);
+    padding: 36px 40px;
+    overflow: hidden;
+}
+.add-hero-glow {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+    filter: blur(60px);
+}
+.add-hero-glow-1 {
+    width: 280px; height: 280px;
+    background: rgba(241,81,98,0.18);
+    top: -80px; right: 10%;
+}
+.add-hero-glow-2 {
+    width: 200px; height: 200px;
+    background: rgba(65,216,180,0.12);
+    bottom: -60px; left: 5%;
+}
+.add-hero-glow-3 {
+    width: 160px; height: 160px;
+    background: rgba(255,157,87,0.10);
+    top: 20px; left: 40%;
+}
+.add-hero-content {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+}
+.add-hero-icon {
+    width: 56px; height: 56px;
+    background: linear-gradient(135deg, rgba(241,81,98,0.25), rgba(244,112,90,0.15));
+    border: 1.5px solid rgba(241,81,98,0.35);
+    border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.5rem;
+    color: #f47072;
+    flex-shrink: 0;
+    backdrop-filter: blur(8px);
+}
+.add-hero-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: white;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+}
+.add-hero-sub {
+    font-size: 0.82rem;
+    color: rgba(255,255,255,0.45);
+    margin-top: 4px;
+}
+
+.add-form-wrap {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 32px 28px 48px;
+}
+
+.add-save-banner {
+    border-radius: 12px;
+    padding: 13px 18px;
+    font-size: 0.85rem;
+    margin-bottom: 24px;
+}
+
+/* ── Sections ── */
+.add-section {
+    background: white;
+    border-radius: 18px;
+    box-shadow: 0 4px 20px rgba(29,34,40,0.07);
+    margin-bottom: 20px;
+    overflow: hidden;
+    border: 1px solid rgba(41,41,76,0.06);
+    transition: box-shadow 0.2s;
+}
+.add-section:hover {
+    box-shadow: 0 8px 32px rgba(29,34,40,0.11);
+}
+
+.add-section-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 22px;
+    background: linear-gradient(to right, rgba(41,41,76,0.03), transparent);
+    border-bottom: 1px solid rgba(41,41,76,0.06);
+}
+.add-section-num {
+    font-size: 0.62rem;
+    font-weight: 800;
+    color: #ccc;
+    letter-spacing: 0.08em;
+    min-width: 22px;
+}
+.add-section-icon {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.95rem;
+    flex-shrink: 0;
+}
+.add-section-title {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: var(--midnight);
+    line-height: 1.2;
+}
+.add-section-sub {
+    font-size: 0.71rem;
+    color: #bbb;
+    margin-top: 1px;
+}
+
+.add-section-body {
+    padding: 22px 22px;
+}
+
+/* ── Fields ── */
+.add-field { }
+.add-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: #8a8aaa;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    display: block;
+    margin-bottom: 7px;
+}
+.add-label-hint {
+    font-weight: 400;
+    text-transform: none;
+    color: #bbb;
+    font-size: 0.67rem;
+    letter-spacing: 0;
+}
+.add-required {
+    color: var(--fit-red);
+    font-size: 0.75rem;
+}
+
+.add-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+.add-input-icon {
+    position: absolute;
+    left: 13px;
+    color: #c8c8d8;
+    font-size: 0.82rem;
+    pointer-events: none;
+    transition: color 0.2s;
+    z-index: 1;
+}
+.add-input {
+    width: 100%;
+    padding: 10px 14px 10px 36px;
+    border: 1.5px solid #e8e8f0;
+    border-radius: 12px;
+    font-size: 0.84rem;
+    font-family: 'Poppins', sans-serif;
+    color: var(--midnight);
+    background: #fafafa;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+    -webkit-appearance: none;
+}
+.add-input::placeholder { color: #c4c4d4; font-size: 0.8rem; }
+.add-input:focus {
+    border-color: transparent;
+    background: white;
+    box-shadow:
+        0 0 0 2px rgba(241,81,98,0.18),
+        0 2px 12px rgba(241,81,98,0.08);
+    background: linear-gradient(white, white) padding-box,
+                linear-gradient(135deg, #f15162 0%, #7b79c8 100%) border-box;
+    border-color: transparent;
+}
+.add-input:focus + .add-input-icon,
+.add-input-wrap:focus-within .add-input-icon {
+    color: var(--fit-red);
+}
+.add-select { cursor: pointer; }
+
+textarea.add-input { resize: vertical; padding-top: 10px; }
+
+
+/* ── Agreement placeholder ── */
+.add-agr-placeholder {
+    border: 2px dashed #e0e0ee;
+    border-radius: 12px;
+    padding: 24px 16px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+.add-agr-enable-btn {
+    margin-top: 4px;
+    background: none;
+    border: 1.5px solid #e0e0ee;
+    border-radius: 20px;
+    padding: 5px 16px;
+    font-size: 0.75rem;
+    font-family: 'Poppins', sans-serif;
+    font-weight: 500;
+    color: var(--midnight);
+    cursor: pointer;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+}
+.add-agr-enable-btn:hover { border-color: var(--fit-red); color: var(--fit-red); }
+
+/* ── Region radio group ── */
+.region-radio-group {
+    display: flex;
+    gap: 10px;
+}
+.region-radio-opt { display: flex; cursor: pointer; }
+.region-radio-opt input[type=radio] { position: absolute; opacity: 0; width: 0; height: 0; }
+.region-radio-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 8px 18px;
+    border: 1.5px solid #e8e8f0;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #8a8aaa;
+    background: #fafafa;
+    transition: all 0.18s;
+    white-space: nowrap;
+    user-select: none;
+}
+.region-radio-opt input[type=radio]:checked + .region-radio-pill {
+    border-color: transparent;
+    color: white;
+    background: linear-gradient(135deg, #f15162 0%, #7b79c8 100%);
+    box-shadow: 0 2px 10px rgba(241,81,98,0.25);
+}
+.region-radio-opt:hover .region-radio-pill {
+    border-color: #d0c8e8;
+    color: var(--midnight);
+}
+
+/* ── Email more button ── */
+.add-email-more {
+    margin-top: 8px;
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 0.75rem;
+    color: var(--fit-red);
+    cursor: pointer;
+    font-family: 'Poppins', sans-serif;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    opacity: 0.85;
+    transition: opacity 0.15s;
+}
+.add-email-more:hover { opacity: 1; }
+
+/* ── Submit bar ── */
+.add-submit-bar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    padding-top: 6px;
+}
+.add-cancel-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 10px 22px;
+    border-radius: 12px;
+    background: rgba(41,41,76,0.06);
+    color: #888 !important;
+    text-decoration: none;
+    font-size: 0.83rem;
+    font-weight: 500;
+    border: 1.5px solid transparent;
+    transition: all 0.15s;
+}
+.add-cancel-btn:hover {
+    background: rgba(41,41,76,0.10);
+    color: var(--midnight) !important;
+}
+.add-submit-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 11px 32px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #F15162, #F4705A);
+    color: white;
+    font-size: 0.88rem;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 6px 20px rgba(241,81,98,0.35);
+    transition: opacity 0.15s, transform 0.15s, box-shadow 0.15s;
+    font-family: 'Poppins', sans-serif;
+}
+.add-submit-btn:hover {
+    opacity: 0.93;
+    transform: translateY(-2px);
+    box-shadow: 0 10px 28px rgba(241,81,98,0.45);
+}
+.add-submit-btn:disabled {
+    opacity: 0.65;
+    transform: none;
+    cursor: not-allowed;
+}
+
+</style>
+
+<script is:inline define:vars={{ fyYears, currentFy: fy }}>
+// ── Email fields ──────────────────────────────────────────────────────────────
+function addEmailField() {
+    const container = document.getElementById('email-fields');
+    const row = document.createElement('div');
+    row.className = 'add-input-wrap email-row';
+    row.style.position = 'relative';
+    row.innerHTML = `
+        <i class="bi bi-envelope add-input-icon" style="position:absolute;left:13px;color:#c8c8d8;font-size:0.82rem;pointer-events:none;"></i>
+        <input type="email" name="contact_email" class="add-input" placeholder="email@company.com" style="padding-right:38px;">
+        <button type="button" onclick="this.closest('.email-row').remove()"
+                style="position:absolute;right:10px;background:none;border:none;color:#ccc;font-size:1.1rem;cursor:pointer;line-height:1;padding:0;transition:color 0.15s;"
+                onmouseover="this.style.color='#dc3545'" onmouseout="this.style.color='#ccc'">&times;</button>`;
+    container.appendChild(row);
+    row.querySelector('input').focus();
+}
+
+// ── Sub-history rows ──────────────────────────────────────────────────────────
+const FY_OPTIONS  = fyYears.map(yr => ({ value: yr, label: `FY ${yr-2000}-${yr-1999}` }));
+const CURRENCIES  = ['USD','INR','EUR','GBP','AED','SGD','CAD','AUD'];
+
+function buildFyOptions(selected) {
+    return FY_OPTIONS.map(o =>
+        `<option value="${o.value}"${o.value == selected ? ' selected' : ''}>${o.label}</option>`
+    ).join('');
+}
+function buildCurOptions(selected) {
+    return CURRENCIES.map(c => `<option${c === (selected || 'USD') ? ' selected' : ''}>${c}</option>`).join('');
+}
+function updateEmptyMsg() {
+    const rows = document.querySelectorAll('.sub-row');
+    document.getElementById('sub-history-empty').style.display = rows.length ? 'none' : '';
+}
+function addSubRow(fy, currency, amount, contributor) {
+    const container = document.getElementById('sub-history-rows');
+    const id = 'rc_' + Date.now() + Math.random().toString(36).slice(2);
+    const row = document.createElement('div');
+    row.className = 'sub-row';
+    row.innerHTML = `
+        <select name="sub_fy" title="Financial Year">${buildFyOptions(fy != null ? fy : currentFy)}</select>
+        <select name="sub_currency" class="sub-cur" title="Currency">${buildCurOptions(currency)}</select>
+        <input type="number" name="sub_amount" class="sub-amt"
+               value="${amount != null ? Math.round(amount) : ''}"
+               step="1" min="0" placeholder="Contract amount">
+        <select name="sub_contributor" class="sub-contrib-select">
+            <option value="Sales"${contributor !== 'CX' ? ' selected' : ''}>Sales</option>
+            <option value="CX"${contributor === 'CX' ? ' selected' : ''}>CX</option>
+        </select>
+        <button type="button" class="sub-remove" title="Remove"
+                onclick="this.closest('.sub-row').remove();window.updateEmptyMsg();">
+            <i class="bi bi-trash3"></i>
+        </button>`;
+    container.appendChild(row);
+    updateEmptyMsg();
+    row.querySelector('.sub-amt').focus();
+}
+updateEmptyMsg();
+
+// Expose to global scope so inline onclick attributes can reach them
+window.addEmailField  = addEmailField;
+window.addSubRow      = addSubRow;
+window.updateEmptyMsg = updateEmptyMsg;
+
+// ── Agreement upload toggle ───────────────────────────────────────────────────
+function enableAgrUpload() {
+    document.getElementById('agr-placeholder').style.display = 'none';
+    document.getElementById('agr-form').style.display = '';
+}
+function cancelAgrUpload() {
+    document.getElementById('agr-form').style.display = 'none';
+    document.getElementById('agr-placeholder').style.display = '';
+    document.getElementById('agrFile').value = '';
+}
+window.enableAgrUpload = enableAgrUpload;
+window.cancelAgrUpload = cancelAgrUpload;
+
+// ── Form submit ───────────────────────────────────────────────────────────────
+document.getElementById('addForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    const btn    = document.getElementById('submitBtn');
+    const banner = document.getElementById('saveBanner');
+
+    btn.disabled  = true;
+    btn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Saving…';
+    banner.style.display    = '';
+    banner.style.background = '#f0f4ff';
+    banner.style.border     = '1px solid #c0d0ff';
+    banner.style.color      = '#1a2a6c';
+    banner.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Adding client to GitHub…';
+
+    try {
+        // Step 1: create client (+ sub_history)
+        const formData = new FormData(this);
+        const res  = await fetch('/api/add', { method: 'POST', body: formData });
+        const json = await res.json();
+        if (!res.ok || json.error) throw new Error(json.error || 'Save failed');
+        const newId = json.id;
+
+        // Step 2: upload agreement if a file was selected
+        const agrFile = document.getElementById('agrFile');
+        if (agrFile && agrFile.files.length > 0) {
+            banner.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Uploading agreement…';
+            const agrForm = new FormData();
+            agrForm.append('file', agrFile.files[0]);
+            agrForm.append('doc_type', document.getElementById('agrDocType').value);
+            const agrRes  = await fetch(`/api/client/${newId}/upload-agreement`, { method: 'POST', body: agrForm });
+            const agrJson = await agrRes.json();
+            if (!agrRes.ok || agrJson.error) throw new Error('Agreement upload failed: ' + agrJson.error);
+        }
+
+        banner.style.background = '#eafaf3';
+        banner.style.border     = '1px solid #6fcfa0';
+        banner.style.color      = '#1a6c3a';
+        banner.innerHTML = `<i class="bi bi-check-circle-fill me-2"></i><strong>Client added!</strong> The live site is rebuilding — it will appear in ~60 seconds. <a href="/clients" style="color:inherit;text-decoration:underline;font-weight:600;">Go to Clients →</a>`;
+        btn.innerHTML = '<i class="bi bi-check2 me-2"></i>Saved!';
+        this.reset();
+        cancelAgrUpload();
+        document.querySelectorAll('.sub-row').forEach(r => r.remove());
+        updateEmptyMsg();
+    } catch (err) {
+        banner.style.background = '#fff0f0';
+        banner.style.border     = '1px solid #f0a0a0';
+        banner.style.color      = '#8b0000';
+        banner.innerHTML = '<i class="bi bi-exclamation-triangle-fill me-2"></i><strong>Error:</strong> ' + err.message;
+        btn.disabled  = false;
+        btn.innerHTML = '<i class="bi bi-check2-circle me-2"></i>Save Client';
+    }
+});
+</script>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+<script is:inline src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<style>
+/* ── Flatpickr theme override ── */
+.flatpickr-calendar {
+    border-radius: 16px !important;
+    box-shadow: 0 12px 40px rgba(29,34,40,0.16) !important;
+    border: 1px solid rgba(41,41,76,0.10) !important;
+    font-family: 'Poppins', sans-serif !important;
+    overflow: hidden;
+}
+.flatpickr-months { background: var(--midnight); border-radius: 14px 14px 0 0; padding: 4px 0; }
+.flatpickr-months .flatpickr-month,
+.flatpickr-current-month .flatpickr-monthDropdown-months,
+.flatpickr-current-month input.cur-year { color: white !important; fill: white !important; }
+.flatpickr-prev-month svg, .flatpickr-next-month svg { fill: rgba(255,255,255,0.7) !important; }
+.flatpickr-prev-month:hover svg, .flatpickr-next-month:hover svg { fill: white !important; }
+.flatpickr-weekdays { background: rgba(41,41,76,0.05); }
+.flatpickr-weekday { color: var(--midnight) !important; font-weight: 600; font-size: 0.72rem; }
+.flatpickr-day { border-radius: 10px !important; font-size: 0.82rem; color: var(--midnight); }
+.flatpickr-day:hover { background: rgba(241,81,98,0.08); border-color: transparent; }
+.flatpickr-day.selected, .flatpickr-day.selected:hover {
+    background: linear-gradient(135deg, #F15162, #F4705A) !important;
+    border-color: transparent !important;
+    color: white !important;
+    font-weight: 600;
+}
+.flatpickr-day.today { border-color: rgba(241,81,98,0.4) !important; color: var(--fit-red) !important; font-weight: 600; }
+.flatpickr-day.today:hover { background: rgba(241,81,98,0.08); }
+.flatpickr-day.today.selected { color: white !important; }
+.flatpickr-monthDropdown-months { background: var(--midnight) !important; }
+</style>
+<script is:inline>
+document.querySelectorAll('.date-pick').forEach(function(el) {
+    flatpickr(el, {
+        dateFormat: 'd/m/Y',
+        allowInput: true,
+        disableMobile: false,
+        animate: true,
+    });
+});
+</script>
+
+<style is:global>
+/* ── Sub-history rows (global: JS-created elements) ── */
+.sub-row {
+    display: grid;
+    grid-template-columns: 116px 78px 1fr auto auto;
+    align-items: stretch;
+    gap: 0;
+    background: white;
+    border: 1.5px solid #e8e8f0;
+    border-radius: 14px;
+    overflow: hidden;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.sub-row:hover {
+    border-color: #d0c8e8;
+    box-shadow: 0 4px 16px rgba(41,41,76,0.09);
+}
+.sub-row select,
+.sub-row input[type=number] {
+    border: none;
+    border-right: 1.5px solid #f0f0f8;
+    background: transparent;
+    font-family: 'Poppins', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: #29294c;
+    outline: none;
+    padding: 12px 10px 12px 14px;
+    width: 100%;
+    -webkit-appearance: none;
+    appearance: none;
+}
+.sub-row select {
+    cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23aaa'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 26px;
+}
+.sub-row .sub-amt {
+    padding: 12px 14px;
+}
+.sub-row .sub-amt::placeholder { color: #c4c4d4; font-size: 0.79rem; }
+
+/* contributor toggle */
+.sub-contrib-select {
+    height: 100%;
+    border: none;
+    border-right: 1.5px solid #f0f0f8;
+    background: #f7f7fc;
+    color: var(--midnight);
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-family: 'Poppins', sans-serif;
+    padding: 0 12px;
+    cursor: pointer;
+    outline: none;
+    min-width: 80px;
+    appearance: auto;
+}
+.sub-contrib-select:focus { background: #f0f0fa; }
+
+/* remove button */
+.sub-row .sub-remove {
+    background: none;
+    border: none;
+    color: #d8d8e8;
+    font-size: 0.9rem;
+    cursor: pointer;
+    padding: 0 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s, background 0.15s;
+}
+.sub-row .sub-remove:hover {
+    color: #f15162;
+    background: rgba(241,81,98,0.06);
+}
+</style>
+
+</BaseLayout>

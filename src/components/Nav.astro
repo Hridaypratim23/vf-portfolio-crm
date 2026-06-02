@@ -1,0 +1,20 @@
+---
+interface Props { backHref?: string; backLabel?: string }
+const { backHref, backLabel } = Astro.props;
+---
+<nav class="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-100 shadow-sm sticky top-0 z-50">
+  <a href="/" class="flex items-center gap-2 no-underline">
+    <img src="/static/vfit-logo.png" alt="Vantage Fit" class="h-8 w-auto"
+         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'" />
+    <span class="hidden items-center gap-2">
+      <span class="text-fit-red text-xl">❤</span>
+      <span class="font-bold text-midnight text-sm">Vantage Fit <span class="font-normal text-gray-400">CRM</span></span>
+    </span>
+  </a>
+  {backHref && (
+    <a href={backHref}
+       class="flex items-center gap-1.5 text-sm font-medium text-gray-600 hover:text-midnight transition-colors px-3 py-1.5 rounded-lg hover:bg-gray-100">
+      <i class="bi bi-arrow-left"></i>{backLabel ?? 'Dashboard'}
+    </a>
+  )}
+</nav>

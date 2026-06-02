@@ -1,0 +1,135 @@
+[
+  {
+    "id": 1,
+    "client_id": 1,
+    "activity_type": "Follow-up",
+    "note": "Onboarding call completed.",
+    "created_at": "2025-04-15T13:00:00Z"
+  },
+  {
+    "id": 2,
+    "client_id": 3,
+    "activity_type": "Email",
+    "note": "Shared Q2 engagement report.",
+    "created_at": "2025-08-13T13:00:00Z"
+  },
+  {
+    "id": 3,
+    "client_id": 5,
+    "activity_type": "Follow-up",
+    "note": "Follow-up on pending documentation.",
+    "created_at": "2025-09-28T09:00:00Z"
+  },
+  {
+    "id": 4,
+    "client_id": 6,
+    "activity_type": "Email",
+    "note": "Follow-up on pending documentation.",
+    "created_at": "2025-03-18T17:00:00Z"
+  },
+  {
+    "id": 5,
+    "client_id": 7,
+    "activity_type": "Follow-up",
+    "note": "Sent renewal reminder email.",
+    "created_at": "2025-12-23T12:00:00Z"
+  },
+  {
+    "id": 6,
+    "client_id": 8,
+    "activity_type": "Call",
+    "note": "Reviewed campaign performance metrics.",
+    "created_at": "2025-04-09T16:00:00Z"
+  },
+  {
+    "id": 7,
+    "client_id": 10,
+    "activity_type": "Email",
+    "note": "Shared Q2 engagement report.",
+    "created_at": "2025-07-16T16:00:00Z"
+  },
+  {
+    "id": 8,
+    "client_id": 13,
+    "activity_type": "Follow-up",
+    "note": "Follow-up on pending documentation.",
+    "created_at": "2025-03-12T10:00:00Z"
+  },
+  {
+    "id": 9,
+    "client_id": 15,
+    "activity_type": "Note",
+    "note": "Reviewed campaign performance metrics.",
+    "created_at": "2025-01-04T10:00:00Z"
+  },
+  {
+    "id": 10,
+    "client_id": 16,
+    "activity_type": "Email",
+    "note": "Onboarding call completed.",
+    "created_at": "2025-01-06T14:00:00Z"
+  },
+  {
+    "id": 11,
+    "client_id": 17,
+    "activity_type": "Meeting",
+    "note": "Follow-up on pending documentation.",
+    "created_at": "2025-11-17T15:00:00Z"
+  },
+  {
+    "id": 12,
+    "client_id": 18,
+    "activity_type": "Follow-up",
+    "note": "Sent renewal reminder email.",
+    "created_at": "2025-09-22T12:00:00Z"
+  },
+  {
+    "id": 13,
+    "client_id": 19,
+    "activity_type": "Note",
+    "note": "Checked in on platform adoption.",
+    "created_at": "2025-12-06T13:00:00Z"
+  },
+  {
+    "id": 14,
+    "client_id": 21,
+    "activity_type": "Call",
+    "note": "Sent renewal reminder email.",
+    "created_at": "2025-07-08T11:00:00Z"
+  },
+  {
+    "id": 15,
+    "client_id": 22,
+    "activity_type": "Note",
+    "note": "Onboarding call completed.",
+    "created_at": "2025-05-25T12:00:00Z"
+  },
+  {
+    "id": 16,
+    "client_id": 24,
+    "activity_type": "Note",
+    "note": "Reviewed campaign performance metrics.",
+    "created_at": "2025-12-24T17:00:00Z"
+  },
+  {
+    "id": 17,
+    "client_id": 25,
+    "activity_type": "Call",
+    "note": "Discussed renewal terms and pricing.",
+    "created_at": "2025-11-14T11:00:00Z"
+  },
+  {
+    "id": 18,
+    "client_id": 28,
+    "activity_type": "Call",
+    "note": "Onboarding call completed.",
+    "created_at": "2025-06-21T16:00:00Z"
+  },
+  {
+    "id": 19,
+    "client_id": 30,
+    "activity_type": "Call",
+    "note": "Discussed renewal terms and pricing.",
+    "created_at": "2025-05-08T15:00:00Z"
+  }
+]

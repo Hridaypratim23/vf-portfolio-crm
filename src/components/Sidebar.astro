@@ -1,0 +1,104 @@
+---
+const path = Astro.url.pathname;
+const isOnDashboard = path === '/' || path.startsWith('/clients');
+
+function isActive(href: string): boolean {
+  if (href.includes('#') || href.includes('?')) return false;
+  if (href === '/') return path === '/';
+  return path.startsWith(href);
+}
+---
+<aside class="crm-sidebar">
+  <!-- Close button shown only on mobile -->
+  <div class="sidebar-close-btn">
+    <button id="sidebarCloseBtn" type="button" aria-label="Close menu">
+      <i class="bi bi-x-lg"></i>
+    </button>
+  </div>
+
+  <a href="/" class="sidebar-brand">
+    <span class="sidebar-brand-icon"><i class="bi bi-heart-fill"></i></span>
+    <span class="sidebar-brand-text"><strong>Vantage Fit</strong> CRM</span>
+  </a>
+
+  <nav class="sidebar-nav">
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Main</div>
+      <a href="/" class={`sidebar-link${isActive('/') ? ' active' : ''}`}>
+        <i class="bi bi-grid-1x2-fill"></i><span>Dashboard</span>
+      </a>
+
+      <div class="sidebar-group">
+        <button class="sidebar-link sidebar-group-btn" id="clients-toggle" type="button">
+          <i class="bi bi-people-fill"></i>
+          <span>Clients</span>
+          <i class="bi bi-chevron-down sidebar-chevron"></i>
+        </button>
+        <div class="sidebar-submenu" id="clients-submenu">
+          <a href="/clients" class="sidebar-sublink">
+            <i class="bi bi-list-ul"></i>Total Clients
+          </a>
+          <a href="/clients?filter=active" class="sidebar-sublink">
+            <i class="bi bi-check2-circle"></i>Active Clients
+          </a>
+        </div>
+      </div>
+
+      <a href="/renewals" class={`sidebar-link${isActive('/renewals') ? ' active' : ''}`}>
+        <i class="bi bi-arrow-repeat"></i><span>Renewals</span>
+      </a>
+      <a href="/fy-revenue" class={`sidebar-link${isActive('/fy-revenue') ? ' active' : ''}`}>
+        <i class="bi bi-bar-chart-fill"></i><span>FY Revenue</span>
+      </a>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Tools</div>
+      <a href="/#ai-insights" class="sidebar-link">
+        <i class="bi bi-stars"></i><span>AI Insights</span>
+      </a>
+      <a href="/repository" class={`sidebar-link${isActive('/repository') ? ' active' : ''}`}>
+        <i class="bi bi-archive-fill"></i><span>Repository</span>
+      </a>
+      <a href="/finance-data" class={`sidebar-link${isActive('/finance-data') ? ' active' : ''}`}>
+        <i class="bi bi-graph-up-arrow"></i><span>Finance Data</span>
+      </a>
+    </div>
+
+  </nav>
+
+  <div class="sidebar-bottom">
+    <a href="/add" class="sidebar-cta">
+      <i class="bi bi-plus-circle-fill"></i>
+      <span>Add Client</span>
+    </a>
+    <a href="/api/logout" class="sidebar-link sidebar-logout" style="margin-top:0.5rem;color:#9ca3af;font-size:0.82rem;">
+      <i class="bi bi-box-arrow-right"></i><span>Sign Out</span>
+    </a>
+  </div>
+</aside>
+
+<script is:inline define:vars={{ isOnDashboard }}>
+(function() {
+  const btn = document.getElementById('clients-toggle');
+  const menu = document.getElementById('clients-submenu');
+  const chevron = btn && btn.querySelector('.sidebar-chevron');
+
+  function open() {
+    menu.classList.add('open');
+    if (chevron) chevron.style.transform = 'rotate(180deg)';
+  }
+  function close() {
+    menu.classList.remove('open');
+    if (chevron) chevron.style.transform = '';
+  }
+
+  if (isOnDashboard) open();
+
+  if (btn) btn.addEventListener('click', () => {
+    menu.classList.contains('open') ? close() : open();
+  });
+
+})();
+</script>

@@ -1,0 +1,654 @@
+---
+
+import { getLiveFxRates, contractValueForDisplay } from '../lib/revenue';
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const db = (Astro.locals as any).runtime.env.DB;
+const [fxRates, batchResults] = await Promise.all([
+  getLiveFxRates(),
+  db.batch([
+    db.prepare('SELECT * FROM clients ORDER BY company_name'),
+    db.prepare('SELECT * FROM sub_history'),
+  ]),
+]) as [Record<string, number>, any[]];
+const allClients  = batchResults[0].results as any[];
+const subHistRows = batchResults[1].results as any[];
+
+const _subHistByClient: Record<number, any[]> = {};
+for (const r of subHistRows) {
+  if (!_subHistByClient[r.client_id]) _subHistByClient[r.client_id] = [];
+  _subHistByClient[r.client_id].push(r);
+}
+function _toUSD(amount: number, currency: string): number {
+  const rate = fxRates[(currency || 'USD').toUpperCase()] ?? 1;
+  return amount / rate;
+}
+function clientCvForDisplay(c: any): number | null {
+  const result = contractValueForDisplay(c, _subHistByClient[c.id] || [], _toUSD);
+  return result ? result.usd : null;
+}
+
+// Last active FY per client (max financial_year in sub_history)
+const lastActiveFyByClient: Record<number, number | null> = {};
+for (const c of allClients) {
+  const rows = _subHistByClient[c.id] || [];
+  lastActiveFyByClient[c.id] = rows.length > 0 ? Math.max(...rows.map((r: any) => r.financial_year)) : null;
+}
+function fmtFy(fy: number | null): string {
+  if (!fy) return '';
+  return `FY ${String(fy).slice(-2)}-${String(fy + 1).slice(-2)}`;
+}
+
+const indiaClients = allClients.filter(c => c.region ? c.region !== 'North America' : (c.type || '') !== 'Annual');
+
+const activeIndiaCount  = indiaClients.filter(c => (c.status || '').includes('Active')).length;
+const totalIndiaCount   = indiaClients.length;
+const annualCount       = indiaClients.filter(c => { const t = c.type||''; return t.includes('Subscription')||t==='Annual'||t.includes('Partnership'); }).length;
+const onetimePureCount  = indiaClients.filter(c => { const t = c.type||''; return (t === 'One time' || t === 'One Time') && !t.toLowerCase().includes('repeat'); }).length;
+const onetimeRepeatCount = indiaClients.filter(c => { const t = c.type||''; return t.toLowerCase().includes('repeat') && !t.includes('Subscription') && !t.includes('Annual'); }).length;
+const churnCount        = indiaClients.filter(c => (c.status||'').toLowerCase().includes('churn')).length;
+
+const filterParam = Astro.url.searchParams.get('filter');
+const backParam   = filterParam === 'active' ? '/clients?filter=active' : '/clients';
+
+const searchData = JSON.stringify(allClients.map(c => ({
+  id: c.id,
+  company_name: c.company_name || '',
+  contact_name: c.contact_name || '',
+  contact_email: c.contact_email || '',
+  location: c.location || '',
+  located_in: c.located_in || '',
+  type: c.type || '',
+  status: c.status || '',
+  notes: c.notes || '',
+  active_month: c.active_month || '',
+  campaign_start_date: c.campaign_start_date || '',
+  campaign_end_date: c.campaign_end_date || '',
+  agreement_start_date: c.agreement_start_date || '',
+  agreement_end_date: c.agreement_end_date || '',
+  employee_base: c.employee_base || '',
+})));
+
+const AVATAR_COLORS = ['#0ba882','#3b5bdb','#e8900a','#6741d9','#f15162','#0d9adb','#2d9c4e','#c2255c','#1971c2','#5c7cfa'];
+function getInitials(name: string) { return name.split(/\s+/).slice(0,2).map((w:string) => w[0]||'').join('').toUpperCase(); }
+---
+
+<BaseLayout title="All Clients">
+
+<style is:global>
+/* ── Clients — summary / filter strip ───────────── */
+.cl-client-cell { display: flex; align-items: center; gap: 9px; }
+.cl-avatar {
+  width: 30px; height: 30px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.63rem; font-weight: 800; color: #fff; flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+
+.cl-summary {
+  display: flex;
+  align-items: stretch;
+  background: #fff;
+  border: 1px solid #eaeaf2;
+  border-radius: 14px;
+  margin-top: 20px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.cl-stat {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 12px 16px;
+  border-right: 1px solid #f0f0f8;
+  flex-shrink: 0;
+}
+.cl-stat-num   { font-size: 1.1rem; font-weight: 800; color: var(--midnight); letter-spacing: -0.02em; line-height: 1; }
+.cl-stat-label { font-size: 0.58rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #a0a8b4; }
+
+.cl-filters {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 16px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+.cl-filter-btn {
+  background: none;
+  border: 1.5px solid #e8e8f0;
+  border-radius: 20px;
+  padding: 4px 13px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #a0a8b4;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.cl-filter-btn:hover { border-color: var(--midnight); color: var(--midnight); }
+.cl-filter-btn.cl-active { background: var(--midnight); border-color: var(--midnight); color: white; }
+.cl-filter-btn.cl-active.cl-f-green  { background: #0ba882; border-color: #0ba882; }
+.cl-filter-btn.cl-active.cl-f-gray   { background: #6b7280; border-color: #6b7280; }
+.cl-summary-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+}
+
+/* ── Clients — light table header ────────────────── */
+.cl-thead th {
+  background: #f8f9fb !important;
+  color: #8e98a6 !important;
+  font-size: 0.58rem !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.1em !important;
+  padding: 10px 16px !important;
+  border: none !important;
+  border-bottom: 1px solid #eaeaf2 !important;
+  white-space: nowrap;
+  vertical-align: middle;
+  cursor: pointer;
+  user-select: none;
+}
+.cl-thead th:hover { background: #eff1f6 !important; }
+.cl-thead th::after { content: " ⇅"; opacity: 0.28; font-size: 0.6rem; }
+.cl-thead th[data-sort="asc"]::after  { content: " ↑"; opacity: 1; color: #0ba882; }
+.cl-thead th[data-sort="desc"]::after { content: " ↓"; opacity: 1; color: #0ba882; }
+
+/* ── Clients — table body ─────────────────────────── */
+.cl-table { border-collapse: collapse; width: 100%; }
+.cl-table tbody tr { border-bottom: 1px solid #f2f2f8; transition: background 0.1s; cursor: pointer; }
+.cl-table tbody tr:last-child { border-bottom: none; }
+.cl-table tbody tr:hover { background: #fff8f9 !important; box-shadow: inset 3px 0 0 #f15162; }
+.cl-table td { padding: 10px 16px !important; font-size: 0.8rem; border: none !important; vertical-align: middle; }
+
+.cl-name { font-weight: 600; font-size: 0.84rem; color: var(--midnight); text-decoration: none; display: block; line-height: 1.3; }
+.cl-name:hover { color: #f15162; }
+.cl-meta  { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+.cl-email { font-size: 0.68rem; color: #b8b8cc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; display: block; }
+.cl-badge-stack { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.cl-emp  { font-size: 0.78rem; color: #aaa; }
+.cl-cv   { font-size: 0.8rem; font-weight: 700; color: #0a7a5e; }
+.cl-dash { color: #e0e0ee; }
+</style>
+
+<div class="page-topbar">
+  <a href="/" class="back-link"><i class="bi bi-arrow-left"></i> Dashboard</a>
+  <div style="width:1px;height:24px;background:#eee;"></div>
+  <div>
+    <p class="page-title mb-0" id="pageTitle">All Clients</p>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+    <a href="/add" class="btn-vfit" style="font-size:0.78rem;padding:5px 13px;white-space:nowrap;">
+      <i class="bi bi-plus me-1"></i>Add Client
+    </a>
+    <button onclick="exportClients()" class="btn-export">
+      <i class="bi bi-file-earmark-excel-fill me-1" style="color:#1d6f42;"></i>Export
+    </button>
+    <div style="position:relative;">
+      <i class="bi bi-search" style="position:absolute;left:11px;top:50%;transform:translateY(-50%);color:#bbb;font-size:0.8rem;pointer-events:none;"></i>
+      <input type="text" id="topSearchInput" class="vfit-search" placeholder="Search clients…"
+             style="padding-left:30px;width:230px;" />
+    </div>
+  </div>
+</div>
+
+<div class="container-fluid px-4">
+
+  <!-- ── Summary + filter strip ─────────────────── -->
+  <div class="cl-summary">
+    <div class="cl-stat">
+      <div class="cl-stat-num" id="indiaCount">{totalIndiaCount}</div>
+      <div class="cl-stat-label">Total</div>
+    </div>
+    <div class="cl-stat">
+      <div class="cl-stat-num" id="activeCount" style="color:#0ba882;">{activeIndiaCount}</div>
+      <div class="cl-stat-label">Active</div>
+    </div>
+    <div class="cl-stat">
+      <div class="cl-stat-num" id="annualCount">{annualCount}</div>
+      <div class="cl-stat-label">Annual</div>
+    </div>
+    <div class="cl-stat">
+      <div class="cl-stat-num" id="onetimeCount">{onetimePureCount}</div>
+      <div class="cl-stat-label">One-time</div>
+    </div>
+    <div class="cl-stat">
+      <div class="cl-stat-num" id="onetimeRepeatCount">{onetimeRepeatCount}</div>
+      <div class="cl-stat-label">One-time Repeat</div>
+    </div>
+    <div class="cl-stat" style="border-right:none;">
+      <div class="cl-stat-num" id="churnCount" style="color:#6b7280;">{churnCount}</div>
+      <div class="cl-stat-label">Churn</div>
+    </div>
+    <!-- vertical divider -->
+    <div style="width:1px;background:#f0f0f8;margin:12px 4px;flex-shrink:0;"></div>
+    <div class="cl-filters">
+      <button class="cl-filter-btn cl-active" id="fBtn-all"     data-filter="all">All</button>
+      <button class="cl-filter-btn cl-f-green" id="fBtn-active" data-filter="active">Active</button>
+      <button class="cl-filter-btn"            id="fBtn-annual" data-filter="annual">Annual</button>
+      <button class="cl-filter-btn"            id="fBtn-onetime"        data-filter="onetime">One-time</button>
+      <button class="cl-filter-btn"            id="fBtn-onetime-repeat" data-filter="onetime-repeat">One-time Repeat</button>
+      <button class="cl-filter-btn cl-f-gray"  id="fBtn-churn"          data-filter="churn">Churn</button>
+    </div>
+    <div class="cl-summary-actions">
+      <div id="searchResultBanner" style="display:none;align-items:center;gap:6px;">
+        <i class="bi bi-funnel-fill" style="color:var(--fit-red);font-size:0.76rem;"></i>
+        <span id="searchResultText" style="font-size:0.76rem;color:#666;"></span>
+        <button id="clearSearch" style="background:none;border:1px solid #ddd;border-radius:6px;font-size:0.67rem;padding:2px 8px;cursor:pointer;color:#888;white-space:nowrap;">
+          <i class="bi bi-x"></i> Clear
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- hidden compat div for old JS references -->
+  <div id="activeFilterBanner" style="display:none;"></div>
+  <div id="activeCards"        style="display:none;"></div>
+
+  <!-- ── Client table ───────────────────────────── -->
+  <div class="card vfit-card vfit-table-card mb-4" style="border-top:3px solid var(--fit-red);">
+    <table class="table cl-table mb-0" id="indiaTable">
+      <thead class="cl-thead">
+        <tr>
+          <th>Client</th>
+          <th>Type / Status</th>
+          <th class="text-center">Employees</th>
+          <th class="text-center">Contract Value</th>
+          <th>POC Email</th>
+          <th class="text-center last-fy-col" style="display:none;">Last Active FY</th>
+        </tr>
+      </thead>
+      <tbody>
+        {indiaClients.length > 0 ? indiaClients.map(c => (
+        <tr data-status={c.status || ''} data-client-id={String(c.id)} data-type={c.type || ''}
+            data-href={`/client/${c.id}?back=${encodeURIComponent(backParam)}`}>
+
+          <td>
+            <div class="cl-client-cell">
+              <div class="cl-avatar" style={`background:${AVATAR_COLORS[c.id % AVATAR_COLORS.length]}`}>{getInitials(c.company_name)}</div>
+              <div>
+                <a href={`/client/${c.id}?back=${encodeURIComponent(backParam)}`} class="cl-name">
+                  {c.company_name}
+                </a>
+                <div class="cl-meta">
+                  {c.company_id && <span class="cid-tag">{c.company_id}</span>}
+                </div>
+              </div>
+            </div>
+          </td>
+
+          <td>
+            <div class="cl-badge-stack">
+              {(() => {
+                const t = c.type || '';
+                if (t.includes('Subscription') || t === 'Annual' || t === 'Annual (Partnership)') return <span class="badge badge-annual">Annual</span>;
+                return <span class="badge badge-onetime">{t || 'One Time'}</span>;
+              })()}
+              {(() => {
+                const s = c.status || '';
+                if (s === 'Active') return <span class="badge badge-active">Active</span>;
+                if (s.includes('Active') || s.includes('Repeat')) return <span class="badge badge-repeat">{s}</span>;
+                if (s === 'Churn') return <span class="badge badge-churn">Churn</span>;
+                return <span class="badge badge-inactive">{s}</span>;
+              })()}
+            </div>
+          </td>
+
+          <td class="text-center cl-emp">
+            {c.employee_base || <span class="cl-dash">—</span>}
+          </td>
+
+          <td class="text-center">
+            {(() => {
+              const cv = clientCvForDisplay(c);
+              return cv !== null
+                ? <span class="cl-cv">${new Intl.NumberFormat('en-US').format(cv)}</span>
+                : <span class="cl-dash">—</span>;
+            })()}
+          </td>
+
+          <td>
+            {c.contact_email
+              ? <span class="cl-email">{c.contact_email}</span>
+              : <span class="cl-dash">—</span>
+            }
+          </td>
+
+          <td class="text-center last-fy-col" style="display:none;">
+            {(() => {
+              const fy = lastActiveFyByClient[c.id];
+              return fy
+                ? <span style="font-size:0.78rem;font-weight:600;color:#6b7280;">{fmtFy(fy)}</span>
+                : <span class="cl-dash">—</span>;
+            })()}
+          </td>
+        </tr>
+        )) : (
+        <tr>
+          <td colspan="6" class="text-center py-5" style="color:#ccc;">
+            <i class="bi bi-inbox" style="font-size:2rem;display:block;margin-bottom:10px;opacity:0.4;"></i>
+            No clients found.
+          </td>
+        </tr>
+        )}
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<script is:inline define:vars={{ searchData }}>
+const ALL_CLIENTS = JSON.parse(searchData);
+
+// ── date / search helpers ──────────────────────────────────────────────────
+function parseDate(s) {
+  if (!s) return null;
+  const c = s.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(c)) return new Date(c + 'T00:00:00');
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(c)) {
+    const p = c.split('/'), p0 = +p[0], p1 = +p[1], yr = p[2];
+    if (p0 > 12) return new Date(`${yr}-${p[1].padStart(2,'0')}-${p[0].padStart(2,'0')}T00:00:00`);
+    if (p1 > 12) return new Date(`${yr}-${p[0].padStart(2,'0')}-${p[1].padStart(2,'0')}T00:00:00`);
+    return new Date(`${yr}-${p[1].padStart(2,'0')}-${p[0].padStart(2,'0')}T00:00:00`);
+  }
+  if (/^\d{1,2}-[A-Za-z]{3}-\d{2,4}$/.test(c)) {
+    const MM = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+    const p = c.split('-'); const day = p[0].padStart(2,'0'), mon = MM[p[1].toLowerCase()]||'01';
+    let yr = +p[2]; if (yr < 100) yr += 2000;
+    return new Date(`${yr}-${mon}-${day}T00:00:00`);
+  }
+  if (/^[A-Za-z]{3}-\d{2,4}$/.test(c)) {
+    const MM = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+    const p = c.split('-'), mon = MM[p[0].toLowerCase()]||'01';
+    let yr = +p[1]; if (yr < 100) yr += 2000;
+    return new Date(`${yr}-${mon}-01T00:00:00`);
+  }
+  return null;
+}
+function isSubscription(t) { return t === 'Subscription' || t === 'Subscription (Partnership)' || t === 'Annual' || t === 'Annual (Partnership)'; }
+function isOnetime(t) { return t === 'One time' || t === 'One time (Repeat)'; }
+function parseActiveMonths(s) {
+  if (!s) return [];
+  const MM = {january:1,jan:1,february:2,feb:2,march:3,mar:3,april:4,apr:4,may:5,june:6,jun:6,july:7,jul:7,august:8,aug:8,september:9,sep:9,sept:9,october:10,oct:10,november:11,nov:11,december:12,dec:12};
+  return s.replace(/\//g,',').split(',').map(p => MM[p.trim().toLowerCase()]).filter(Boolean);
+}
+function rangCoversMonth(startStr, endStr, monthNum) {
+  const start = parseDate(startStr), end = parseDate(endStr);
+  if (!start || !end || end < start) return false;
+  for (let yr = start.getFullYear(); yr <= end.getFullYear(); yr++) {
+    if (start <= new Date(yr, monthNum, 0) && end >= new Date(yr, monthNum - 1, 1)) return true;
+  }
+  return false;
+}
+const MONTHS_MAP = {january:1,jan:1,february:2,feb:2,march:3,mar:3,april:4,apr:4,may:5,june:6,jun:6,july:7,jul:7,august:8,aug:8,september:9,sep:9,sept:9,october:10,oct:10,november:11,nov:11,december:12,dec:12};
+const STOPWORDS = new Set(['the','all','show','me','who','are','were','had','have','that','with','for','and','clients','client','in','of','a']);
+
+function smartSearch(q, clients) {
+  const ql = q.trim().toLowerCase();
+  const detected = {};
+  for (const [mn, mv] of Object.entries(MONTHS_MAP)) {
+    if (new RegExp('\\b' + mn + '\\b').test(ql)) { detected.month = [mv, mn]; break; }
+  }
+  if (/\binactive\b/.test(ql)) detected.status = 'inactive';
+  else if (/\bchurn(ed)?\b/.test(ql)) detected.status = 'churn';
+  else if (/\brepeat\b/.test(ql)) detected.status = 'repeat';
+  else if (/\bactive\b/.test(ql)) detected.status = 'active';
+  if (/\bsubscription\b/.test(ql)) detected.type = 'subscription';
+  else if (/\bannual\b/.test(ql)) detected.type = 'annual';
+  else if (/\bone.?time\b/.test(ql)) detected.type = 'onetime';
+  if (/\b(india|indian|row)\b/.test(ql)) detected.location = 'india';
+  const empMatch = ql.match(/(\d+)\s*\+?\s*(employees?|emp|people|users?)/);
+  if (empMatch) detected.min_emp = parseInt(empMatch[1]);
+  if (/\b(overdue|expired|lapsed)\b/.test(ql)) detected.overdue = true;
+  else if (/\b(renewal|renewing|due)\b/.test(ql)) detected.renewal = true;
+
+  const today = new Date();
+  if (!Object.keys(detected).length) {
+    const words = ql.split(/\s+/).filter(w => w.length > 2 && !STOPWORDS.has(w));
+    if (!words.length) return clients;
+    const pat = new RegExp(words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|'), 'i');
+    return clients.filter(c => pat.test([c.company_name,c.contact_name,c.contact_email,c.location,c.located_in,c.type,c.status,c.notes].filter(Boolean).join(' ')));
+  }
+  let results = [...clients];
+  if (detected.month) {
+    const [mv] = detected.month;
+    results = results.filter(c => {
+      if (c.active_month && parseActiveMonths(c.active_month).includes(mv)) return true;
+      if (isOnetime(c.type)) return rangCoversMonth(c.campaign_start_date, c.campaign_end_date, mv);
+      return rangCoversMonth(c.agreement_start_date, c.agreement_end_date, mv);
+    });
+  }
+  if (detected.status) {
+    const s = detected.status;
+    if (s === 'active') results = results.filter(c => /\bactive\b/i.test(c.status));
+    else if (s === 'inactive') results = results.filter(c => c.status.toLowerCase().includes('inactive'));
+    else if (s === 'churn') results = results.filter(c => c.status.toLowerCase().includes('churn'));
+    else if (s === 'repeat') results = results.filter(c => c.status.toLowerCase().includes('repeat'));
+  }
+  if (detected.type) {
+    const t = detected.type;
+    if (t === 'subscription' || t === 'annual') results = results.filter(c => isSubscription(c.type));
+    else if (t === 'onetime') results = results.filter(c => isOnetime(c.type));
+  }
+  if (detected.min_emp) {
+    const minE = detected.min_emp;
+    results = results.filter(c => {
+      try { return parseInt((c.employee_base||'0').split('/')[0].split('-')[0].replace(/[^0-9]/g,'')) >= minE; } catch { return false; }
+    });
+  }
+  if (detected.overdue) {
+    results = results.filter(c => {
+      const end = parseDate(c.agreement_end_date);
+      return isSubscription(c.type) && end && (end.getTime() - today.getTime()) / 86400000 < -1;
+    });
+  } else if (detected.renewal) {
+    results = results.filter(c => {
+      const end = parseDate(c.agreement_end_date);
+      if (!end || !isSubscription(c.type)) return false;
+      const d = (end.getTime() - today.getTime()) / 86400000;
+      return d >= 0 && d <= 90;
+    });
+  }
+  return results;
+}
+
+// ── Count visible rows and update all stat bar numbers ────────────────────
+function recount() {
+  const rows = [...document.querySelectorAll('#indiaTable tbody tr')]
+    .filter(r => r.style.display !== 'none' && r.querySelector('a'));
+
+  let active = 0, annual = 0, onetimePure = 0, onetimeRepeat = 0, churn = 0;
+  for (const r of rows) {
+    const s = r.dataset.status || '';
+    const t = r.dataset.type || '';
+    const tl = t.toLowerCase();
+    const isAnnual = t.includes('Subscription') || t === 'Annual' || t === 'Annual (Partnership)';
+    const isRepeat = tl.includes('repeat') && !isAnnual;
+    if (/\bactive\b/i.test(s)) active++;
+    if (isAnnual) annual++;
+    else if (isRepeat) onetimeRepeat++;
+    else onetimePure++;
+    if (s.toLowerCase().includes('churn')) churn++;
+  }
+
+  const el = document.getElementById('indiaCount');
+  if (el) el.textContent = rows.length;
+  const ae = document.getElementById('activeCount');
+  if (ae) ae.textContent = active;
+  const ane = document.getElementById('annualCount');
+  if (ane) ane.textContent = annual;
+  const oe = document.getElementById('onetimeCount');
+  if (oe) oe.textContent = onetimePure;
+  const ore = document.getElementById('onetimeRepeatCount');
+  if (ore) ore.textContent = onetimeRepeat;
+  const ce = document.getElementById('churnCount');
+  if (ce) ce.textContent = churn;
+}
+recount();
+
+// ── Row click navigation ───────────────────────────────────────────────────
+document.querySelectorAll('.cl-table tbody tr[data-href]').forEach(row => {
+  row.addEventListener('click', function(e) {
+    if (!e.target.closest('a') && !e.target.closest('button')) {
+      window.location.href = this.dataset.href;
+    }
+  });
+});
+
+// ── Filter buttons ─────────────────────────────────────────────────────────
+function applyFilter(type) {
+  document.querySelectorAll('.cl-filter-btn').forEach(b => b.classList.remove('cl-active'));
+  const activeBtn = document.querySelector('[data-filter="' + type + '"]');
+  if (activeBtn) activeBtn.classList.add('cl-active');
+
+  document.querySelectorAll('#indiaTable tbody tr[data-client-id]').forEach(row => {
+    const s  = (row.dataset.status || '').toLowerCase();
+    const t  = row.dataset.type || '';
+    const hasBadgeAnnual = !!row.querySelector('.badge-annual');
+    let show = true;
+    if      (type === 'active')         show = /\bactive\b/i.test(row.dataset.status || '');
+    else if (type === 'annual')         show = hasBadgeAnnual;
+    else if (type === 'onetime')        show = !hasBadgeAnnual;
+    else if (type === 'onetime-pure')   show = t === 'One time' || t === 'One Time';
+    else if (type === 'onetime-repeat') show = t.toLowerCase().includes('repeat') && !hasBadgeAnnual;
+    else if (type === 'churn')          show = s.includes('churn');
+    row.style.display = show ? '' : 'none';
+  });
+
+  const titles = { all:'All Clients', active:'Active Clients', annual:'Annual Clients', onetime:'One-time Clients', 'onetime-repeat':'One-time Repeat Clients', 'onetime-pure':'One-time Clients', churn:'Churned Clients' };
+  const titleEl = document.getElementById('pageTitle');
+  if (titleEl) titleEl.textContent = titles[type] || 'All Clients';
+  // Show Last Active FY column only for churn filter
+  document.querySelectorAll('.last-fy-col').forEach(function(el) {
+    el.style.display = type === 'churn' ? '' : 'none';
+  });
+  recount();
+}
+
+// Wire up filter buttons via event listeners (not inline onclick)
+document.querySelectorAll('.cl-filter-btn[data-filter]').forEach(btn => {
+  btn.addEventListener('click', function() { applyFilter(this.dataset.filter); });
+});
+
+// ── Smart search ───────────────────────────────────────────────────────────
+function applySmartSearch(query) {
+  const banner = document.getElementById('searchResultBanner');
+  const bannerText = document.getElementById('searchResultText');
+  if (!query) {
+    document.querySelectorAll('tbody tr[data-client-id]').forEach(r => r.style.display = '');
+    if (banner) banner.style.display = 'none';
+    recount(); return;
+  }
+  const results = smartSearch(query, ALL_CLIENTS);
+  const matchIds = new Set(results.map(c => String(c.id)));
+  document.querySelectorAll('tbody tr[data-client-id]').forEach(row => {
+    row.style.display = matchIds.has(row.dataset.clientId) ? '' : 'none';
+  });
+  if (banner) {
+    banner.style.display = 'flex';
+    if (bannerText) bannerText.textContent = `${results.length} result${results.length !== 1 ? 's' : ''} for "${query}"`;
+  }
+  recount();
+}
+
+document.getElementById('topSearchInput').addEventListener('keyup', function() {
+  applySmartSearch(this.value.trim());
+});
+
+const clearBtn = document.getElementById('clearSearch');
+if (clearBtn) clearBtn.addEventListener('click', () => {
+  document.getElementById('topSearchInput').value = '';
+  applySmartSearch('');
+});
+
+// ── Column sort ────────────────────────────────────────────────────────────
+document.querySelectorAll('.cl-thead th').forEach((th, i) => {
+  th.addEventListener('click', () => {
+    const tbody = th.closest('table').querySelector('tbody');
+    const asc = th.dataset.sort !== 'asc';
+    th.closest('thead').querySelectorAll('th').forEach(t => delete t.dataset.sort);
+    th.dataset.sort = asc ? 'asc' : 'desc';
+    [...tbody.querySelectorAll('tr')].sort((a, b) => {
+      const va = a.cells[i]?.innerText.trim() || '';
+      const vb = b.cells[i]?.innerText.trim() || '';
+      return asc ? va.localeCompare(vb, undefined, { numeric: true })
+                 : vb.localeCompare(va, undefined, { numeric: true });
+    }).forEach(r => tbody.appendChild(r));
+  });
+});
+
+// ── Exact status filter (from dashboard status chart clicks) ───────────────
+function applyStatusFilter(status) {
+  document.querySelectorAll('.cl-filter-btn').forEach(b => b.classList.remove('cl-active'));
+
+  document.querySelectorAll('#indiaTable tbody tr[data-client-id]').forEach(row => {
+    const s = row.dataset.status || '';
+    // "Active" on the chart includes "Active (Repeat client)" since they're merged in the donut
+    const match = status === 'Active'
+      ? (s === 'Active' || s === 'Active (Repeat client)')
+      : s === status;
+    row.style.display = match ? '' : 'none';
+  });
+
+  const titleEl = document.getElementById('pageTitle');
+  if (titleEl) titleEl.textContent = status + ' Clients';
+
+  document.querySelectorAll('.last-fy-col').forEach(el => { el.style.display = 'none'; });
+
+  const banner = document.getElementById('searchResultBanner');
+  const bannerText = document.getElementById('searchResultText');
+  if (banner) {
+    banner.style.display = 'flex';
+    const n = [...document.querySelectorAll('#indiaTable tbody tr[data-client-id]')]
+      .filter(r => r.style.display !== 'none').length;
+    if (bannerText) bannerText.textContent = `${n} result${n !== 1 ? 's' : ''} for "${status}"`;
+  }
+  recount();
+}
+
+// ── URL params on load ─────────────────────────────────────────────────────
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  const f = params.get('filter');
+  if (f && ['active', 'annual', 'onetime', 'onetime-pure', 'onetime-repeat', 'churn'].includes(f)) {
+    applyFilter(f);
+  }
+  const status = params.get('status') || '';
+  if (status) {
+    applyStatusFilter(status);
+  }
+  const q = params.get('q') || '';
+  if (q) {
+    document.getElementById('topSearchInput').value = q;
+    applySmartSearch(q);
+  }
+})();
+</script>
+
+<script is:inline src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script is:inline>
+function exportClients() {
+  const table = document.getElementById('indiaTable');
+  if (!table || typeof XLSX === 'undefined') return;
+  const headers = [...table.querySelectorAll('thead th')].map(th => th.innerText.trim());
+  const rows = [...table.querySelectorAll('tbody tr')]
+    .filter(tr => tr.style.display !== 'none' && tr.querySelector('a'))
+    .map(tr => [...tr.querySelectorAll('td')].map(td => td.innerText.trim()));
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  ws['!cols'] = headers.map((_, i) => ({ wch: i === 0 ? 30 : i === 4 ? 35 : 16 }));
+  XLSX.utils.book_append_sheet(wb, ws, 'India & RoW');
+  XLSX.writeFile(wb, 'clients.xlsx');
+}
+window.exportClients = exportClients;
+</script>
+
+</BaseLayout>

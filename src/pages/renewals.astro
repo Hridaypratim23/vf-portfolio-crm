@@ -1,0 +1,775 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { getAllClients } from '../lib/db';
+import { parseDate, isSubscription, isOnetime } from '../lib/revenue';
+
+const window_days = 365; // render all; client-side JS filters to 30/60/90d
+
+const today = new Date(); // keep time component to match Flask's datetime.today() boundary behavior
+
+const MONTHS_MAP: Record<string, number> = {
+  january:1,jan:1,february:2,feb:2,march:3,mar:3,april:4,apr:4,may:5,
+  june:6,jun:6,july:7,jul:7,august:8,aug:8,september:9,sep:9,sept:9,
+  october:10,oct:10,november:11,nov:11,december:12,dec:12
+};
+
+function parseActiveMonths(s: string): number[] {
+  if (!s) return [];
+  const parts = s.replace(/\//g, ',').split(',').map(p => p.trim()).filter(Boolean);
+  return parts.map(p => MONTHS_MAP[p.toLowerCase()]).filter(Boolean);
+}
+
+function nextActiveMonthDate(s: string, ref: Date): Date | null {
+  const months = parseActiveMonths(s);
+  if (!months.length) return null;
+  let soonest: Date | null = null;
+  for (const mo of months) {
+    let candidate = new Date(ref.getFullYear(), mo - 1, 1);
+    const diffDays = (ref.getTime() - candidate.getTime()) / 86400000;
+    if (diffDays > 20) candidate = new Date(ref.getFullYear() + 1, mo - 1, 1);
+    if (!soonest || candidate < soonest) soonest = candidate;
+  }
+  return soonest;
+}
+
+function nextRerunDate(start: Date, ref: Date): Date {
+  let candidate = new Date(ref.getFullYear(), start.getMonth(), start.getDate());
+  const diffDays = (ref.getTime() - candidate.getTime()) / 86400000;
+  if (diffDays > 20) candidate = new Date(ref.getFullYear() + 1, start.getMonth(), start.getDate());
+  return candidate;
+}
+
+function fmtDate(d: Date): string {
+  return d.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+}
+
+function diffDays(a: Date, b: Date): number {
+  return Math.floor((a.getTime() - b.getTime()) / 86400000);
+}
+
+type SubEntry = {
+  client: any;
+  end_date: string;
+  days_left: number;
+  notice_by: string;
+  notice_days: number;
+};
+
+type RerunEntry = {
+  client: any;
+  active_month: string;
+  rerun_date: string;
+  rerun_label: string;
+  days_until: number;
+  notice_by: string;
+  notice_days: number;
+};
+
+const db = (Astro.locals as any).runtime.env.DB;
+const all_clients = await getAllClients(db);
+const sub_upcoming: SubEntry[] = [];
+const sub_overdue: SubEntry[] = [];
+const rerun_current: RerunEntry[] = [];
+const rerun_upcoming: RerunEntry[] = [];
+const rerun_missed: RerunEntry[] = [];
+
+for (const c of all_clients) {
+  const ctype = c.type || '';
+
+  if (isSubscription(ctype)) {
+    const end = parseDate(c.agreement_end_date);
+    if (!end) continue;
+    end.setHours(0,0,0,0);
+    const days_left = diffDays(end, today);
+    const notice_by = new Date(end.getTime() - 30 * 86400000);
+    const notice_days = diffDays(notice_by, today);
+    const entry: SubEntry = {
+      client: c,
+      end_date: fmtDate(end),
+      days_left,
+      notice_by: fmtDate(notice_by),
+      notice_days,
+    };
+    if (days_left < -1) {
+      sub_overdue.push(entry);
+    } else if (days_left <= window_days) {
+      sub_upcoming.push(entry);
+    }
+
+  } else if (isOnetime(ctype)) {
+    // Skip clients already renewed this period (Active = currently running, no need to re-prospect)
+    const st = c.status || '';
+    if (st === 'Active' || st === 'Active (Repeat client)') continue;
+
+    const am = c.active_month || null;
+    let rerun: Date | null = null;
+    let rerun_label = '';
+
+    if (am) {
+      rerun = nextActiveMonthDate(am, today);
+      if (rerun) rerun_label = rerun.toLocaleDateString('en-GB', { month:'long', year:'numeric' });
+    } else {
+      const start = parseDate(c.agreement_start_date);
+      if (!start) continue;
+      rerun = nextRerunDate(start, today);
+      rerun_label = rerun ? rerun.toLocaleDateString('en-GB', { month:'long', year:'numeric' }) : '';
+    }
+
+    if (!rerun) continue;
+
+    const days_until = diffDays(rerun, today);
+    const notice_by = new Date(rerun.getTime() - 30 * 86400000);
+    const notice_days = diffDays(notice_by, today);
+    const entry: RerunEntry = {
+      client: c,
+      active_month: am || '',
+      rerun_date: fmtDate(rerun),
+      rerun_label,
+      days_until,
+      notice_by: fmtDate(notice_by),
+      notice_days,
+    };
+
+    if (days_until < -20) {
+      rerun_missed.push(entry);
+    } else if (days_until <= 0) {
+      rerun_current.push(entry);
+    } else if (days_until <= window_days) {
+      rerun_upcoming.push(entry);
+    }
+  }
+}
+
+sub_upcoming.sort((a, b) => a.days_left - b.days_left);
+sub_overdue.sort((a, b) => a.days_left - b.days_left);
+rerun_current.sort((a, b) => a.days_until - b.days_until);
+rerun_upcoming.sort((a, b) => a.days_until - b.days_until);
+rerun_missed.sort((a, b) => b.days_until - a.days_until);
+
+const todayStr = today.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+
+// Build Kanban board data — 5 columns by urgency
+type KanbanCard = { name: string; id: number; tag: string; tagCls: string; cardCls: string; meta: string };
+const kanbanOverdue:  KanbanCard[] = [];
+const kanbanThisMonth: KanbanCard[] = [];
+const kanban30d:      KanbanCard[] = [];
+const kanban60d:      KanbanCard[] = [];
+const kanban90d:      KanbanCard[] = [];
+
+for (const e of sub_overdue) {
+  kanbanOverdue.push({ name: e.client.company_name, id: e.client.id,
+    tag: `${Math.abs(e.days_left)}d overdue`, tagCls: 'kct-red', cardCls: 'kc-red',
+    meta: `Ended ${e.end_date}` });
+}
+for (const e of sub_upcoming) {
+  const d = e.days_left;
+  const tag = d <= 0 ? 'Today' : `${d}d left`;
+  const card: KanbanCard = { name: e.client.company_name, id: e.client.id,
+    tag, tagCls: d <= 30 ? 'kct-orange' : d <= 60 ? 'kct-yellow' : 'kct-green',
+    cardCls: d <= 30 ? 'kc-orange' : d <= 60 ? 'kc-yellow' : 'kc-green',
+    meta: `Renews ${e.end_date}` };
+  if (d <= 30)      kanbanThisMonth.push(card);
+  else if (d <= 60) kanban30d.push(card);
+  else if (d <= 90) kanban60d.push(card);
+  else              kanban90d.push(card);
+}
+for (const e of rerun_current) {
+  kanbanThisMonth.push({ name: e.client.company_name, id: e.client.id,
+    tag: 'Campaign open', tagCls: 'kct-orange', cardCls: 'kc-orange',
+    meta: `Window: ${e.rerun_label}` });
+}
+for (const e of rerun_upcoming) {
+  const d = e.days_until;
+  const card: KanbanCard = { name: e.client.company_name, id: e.client.id,
+    tag: `Re-run in ${d}d`, tagCls: d <= 30 ? 'kct-yellow' : 'kct-green',
+    cardCls: d <= 30 ? 'kc-yellow' : 'kc-green',
+    meta: `Window: ${e.rerun_label}` };
+  if (d <= 30)      kanban30d.push(card);
+  else if (d <= 60) kanban60d.push(card);
+  else              kanban90d.push(card);
+}
+
+// Pre-compute display helpers (avoids <= in JSX which confuses Astro's parser)
+function statusBadge(s: string) {
+  if (s === 'Active') return { cls: 'badge-active', label: 'Active' };
+  if (s.includes('Repeat')) return { cls: 'badge-repeat', label: s };
+  if (s === 'Churn') return { cls: 'badge-churn', label: 'Churn' };
+  return { cls: 'badge-inactive', label: s };
+}
+
+function daysBadgeClass(d: number, threshA = 30, threshB = 60) {
+  if (d > threshB) return 'badge-subscription';
+  if (d > threshA) return 'badge-repeat';
+  return 'badge-inactive';
+}
+
+function noticeBadgeClass(nd: number) {
+  if (nd > 14) return 'steel';
+  if (nd > 7) return 'repeat';
+  return 'inactive';
+}
+
+function rowUrgency(d: number) {
+  if (d > 60) return '';
+  if (d > 30) return 'urgent-mid';
+  return 'urgent-high';
+}
+
+function engClass(eng: string) {
+  const v = parseInt(eng);
+  if (v >= 70) return 'eng-high';
+  if (v >= 40) return 'eng-mid';
+  return 'eng-low';
+}
+---
+
+<BaseLayout title="Renewals & Pipeline">
+
+<style>
+  /* ── Page wrapper ── */
+  .pl-wrap { padding: 28px 32px 48px; max-width: 900px; }
+
+  /* ── Section block ── */
+  .pl-section { margin-bottom: 44px; }
+  .pl-section-head {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 18px;
+  }
+  .pl-section-head h5 {
+    font-size: 0.92rem; font-weight: 700; color: var(--midnight);
+    margin: 0; letter-spacing: -0.01em;
+  }
+  .pl-count {
+    font-size: 0.67rem; font-weight: 700; color: #aaa;
+    background: #f0f1f7; border-radius: 20px; padding: 2px 9px;
+  }
+
+  /* ── Group (overdue / upcoming / etc.) ── */
+  .pl-group { margin-bottom: 24px; }
+  .pl-group-label {
+    font-size: 0.62rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 6px;
+    color: #9099aa;
+  }
+  .pl-group-label.red    { color: #c9313e; }
+  .pl-group-label.green  { color: #1a9e80; }
+  .pl-group-label.orange { color: #c97a30; }
+
+  /* ── Slim card container ── */
+  .pl-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 1px 4px rgba(41,41,76,0.07), 0 4px 16px rgba(41,41,76,0.05);
+    overflow: hidden;
+  }
+  .pl-card.accent-red    { border-top: 2px solid var(--fit-red); }
+  .pl-card.accent-green  { border-top: 2px solid var(--aqua); }
+  .pl-card.accent-orange { border-top: 2px solid var(--orange); }
+
+  /* ── Table ── */
+  .pl-table { width: 100%; border-collapse: collapse; }
+  .pl-table th {
+    background: #f8f9fc;
+    color: #9099aa;
+    font-size: 0.6rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.09em;
+    padding: 9px 18px;
+    border-bottom: 1px solid #ededf5;
+    white-space: nowrap;
+  }
+  .pl-table td {
+    padding: 12px 18px;
+    font-size: 0.83rem;
+    border-bottom: 1px solid #f0f1f7;
+    vertical-align: middle;
+  }
+  .pl-table tbody tr:last-child td { border-bottom: none; }
+  .pl-table tbody tr:hover td { background: #fafbff; }
+  .pl-table tbody tr.row-red   td:first-child { box-shadow: inset 3px 0 0 var(--fit-red); }
+  .pl-table tbody tr.row-orange td:first-child { box-shadow: inset 3px 0 0 var(--orange); }
+  .pl-table tbody tr.row-green td              { background: rgba(65,216,180,0.03); }
+  .pl-table tbody tr.row-green td:first-child  { box-shadow: inset 3px 0 0 var(--aqua); }
+  .pl-table th.col-date  { width: 150px; }
+  .pl-table th.col-tag   { width: 130px; }
+  .pl-table th.col-action { width: 80px; }
+
+  /* ── Client cell ── */
+  .pl-client-name {
+    font-weight: 600; color: var(--midnight);
+    text-decoration: none; font-size: 0.85rem; display: block;
+  }
+  .pl-client-name:hover { color: var(--fit-red); }
+  .pl-client-email { font-size: 0.72rem; color: #bbb; margin-top: 1px; }
+
+  /* ── Status pill ── */
+  .pl-status {
+    display: inline-block; padding: 2px 9px;
+    border-radius: 20px; font-size: 0.67rem; font-weight: 600;
+  }
+  .ps-active   { background: rgba(11,168,130,0.1);  color: #0a7a5e; }
+  .ps-inactive { background: rgba(241,81,98,0.09);  color: #c9313e; }
+  .ps-repeat   { background: rgba(255,157,87,0.12); color: #a85d1a; }
+  .ps-churn    { background: rgba(108,117,125,0.09);color: #555d65; }
+
+  /* ── Urgency tag ── */
+  .pl-tag {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 11px 4px 8px;
+    border-radius: 7px; font-size: 0.69rem; font-weight: 600;
+    letter-spacing: 0.01em; white-space: nowrap;
+  }
+  .pl-tag::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .pt-red    { background: rgba(201,49,62,0.07);  color: #b8202f; border: 1px solid rgba(201,49,62,0.18); }
+  .pt-red::before    { background: #c9313e; }
+  .pt-orange { background: rgba(201,122,48,0.07); color: #9a5512; border: 1px solid rgba(201,122,48,0.20); }
+  .pt-orange::before { background: #c97a30; }
+  .pt-green  { background: rgba(26,158,128,0.07); color: #0d7a62; border: 1px solid rgba(26,158,128,0.18); }
+  .pt-green::before  { background: #1a9e80; }
+  .pt-gray   { background: #f4f5f9; color: #8890a4; border: 1px solid #e4e6f0; }
+  .pt-gray::before   { background: #c4c8d4; }
+
+  /* ── Table view button ── */
+  .btn-tbl-view {
+    display: inline-block;
+    padding: 5px 16px;
+    font-size: 0.69rem; font-weight: 600;
+    border-radius: 7px;
+    border: 1.5px solid #e0e4f0;
+    color: #4a5568;
+    background: #fff;
+    text-decoration: none !important;
+    transition: border-color 0.14s, color 0.14s, background 0.14s;
+    white-space: nowrap;
+  }
+  .btn-tbl-view:hover {
+    border-color: #4a63e0;
+    color: #4a63e0;
+    background: rgba(74,99,224,0.05);
+  }
+
+  /* ── Empty state ── */
+  .pl-empty { padding: 16px 0; font-size: 0.82rem; color: #c4c4cc; display: flex; align-items: center; gap: 8px; }
+</style>
+
+<div class="page-topbar">
+  <a href="/" class="back-link"><i class="bi bi-arrow-left"></i> Dashboard</a>
+  <div style="width:1px;height:22px;background:#eee;"></div>
+  <p class="page-title mb-0">Renewals &amp; Re-run Pipeline</p>
+  <div class="ms-auto d-flex align-items-center gap-2">
+    <div class="view-toggle" id="viewToggle">
+      <button class="view-toggle-btn active" id="btnViewList" onclick="switchView('list')"><i class="bi bi-list-ul"></i> List</button>
+      <button class="view-toggle-btn" id="btnViewBoard" onclick="switchView('board')"><i class="bi bi-kanban"></i> Board</button>
+    </div>
+    <div style="width:1px;height:20px;background:#e8e8ee;"></div>
+    <button id="btn30" onclick="setWindow(30)" class="btn-vfit-ghost" style="font-size:0.74rem;padding:4px 13px;">30d</button>
+    <button id="btn60" onclick="setWindow(60)" class="btn-vfit-ghost" style="font-size:0.74rem;padding:4px 13px;">60d</button>
+    <button id="btn90" onclick="setWindow(90)" class="btn-vfit"       style="font-size:0.74rem;padding:4px 13px;">90d</button>
+  </div>
+</div>
+
+<div class="pl-wrap">
+
+<!-- ══════════════════════════════════════
+     SECTION 1 — SUBSCRIPTION RENEWALS
+══════════════════════════════════════ -->
+<div class="pl-section">
+  <div class="pl-section-head">
+    <div style="width:3px;height:18px;border-radius:2px;background:var(--fit-red);flex-shrink:0;"></div>
+    <h5>Subscription Renewals</h5>
+    <span class="pl-count">{sub_overdue.length + sub_upcoming.length} clients</span>
+  </div>
+
+  {sub_overdue.length > 0 && (
+    <div class="pl-group">
+      <div class="pl-group-label red">
+        <i class="bi bi-exclamation-circle-fill"></i>
+        Needs attention
+      </div>
+      <div class="pl-card accent-red">
+        <table class="pl-table">
+          <thead>
+            <tr>
+              <th>Client</th>
+              <th class="col-date">Agreement Ended</th>
+              <th class="col-tag">Overdue By</th>
+              <th class="col-action"></th>
+            </tr>
+          </thead>
+          <tbody id="subOverdueBlock">
+            {sub_overdue.map(r => (
+              <tr class="row-red">
+                <td>
+                  <a href={`/client/${r.client.id}`} class="pl-client-name">{r.client.company_name}</a>
+                  {r.client.contact_email && <div class="pl-client-email">{r.client.contact_email}</div>}
+                </td>
+                <td style="font-weight:600;color:var(--fit-red);">{r.end_date}</td>
+                <td><span class="pl-tag pt-red">{Math.abs(r.days_left)}d ago</span></td>
+                <td><a href={`/client/${r.client.id}`} class="btn-tbl-view">View</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )}
+
+  {sub_upcoming.length > 0 && (
+    <div id="subUpcomingBlock" class="pl-group">
+      <div class="pl-group-label">
+        Upcoming &mdash; <span id="subUpcomingCount">{sub_upcoming.length}</span> client{sub_upcoming.length !== 1 ? 's' : ''}
+      </div>
+      <div class="pl-card">
+        <table class="pl-table">
+          <thead>
+            <tr>
+              <th>Client</th>
+              <th class="col-date">Agreement Ends</th>
+              <th class="col-tag">Time Left</th>
+              <th class="col-action"></th>
+            </tr>
+          </thead>
+          <tbody id="subUpcomingRows">
+            {sub_upcoming.map(r => {
+              const dlCls = r.days_left > 60 ? 'pt-green' : r.days_left > 30 ? 'pt-orange' : 'pt-red';
+              const trCls = r.days_left > 60 ? '' : r.days_left > 30 ? 'row-orange' : 'row-red';
+              return (
+                <tr class={trCls} data-days={r.days_left}>
+                  <td>
+                    <a href={`/client/${r.client.id}`} class="pl-client-name">{r.client.company_name}</a>
+                    {r.client.contact_email && <div class="pl-client-email">{r.client.contact_email}</div>}
+                  </td>
+                  <td style="color:#555;">{r.end_date}</td>
+                  <td><span class={`pl-tag ${dlCls}`}>{r.days_left}d left</span></td>
+                  <td><a href={`/client/${r.client.id}`} class="btn-tbl-view">View</a></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )}
+
+  <div id="subEmptyMsg" style="display:none;">
+    <div class="pl-empty"><i class="bi bi-check-circle" style="color:var(--aqua);"></i> <span id="subEmptyText">All clear — no renewals due soon.</span></div>
+  </div>
+  {sub_overdue.length === 0 && sub_upcoming.length === 0 && (
+    <div class="pl-empty"><i class="bi bi-check-circle" style="color:var(--aqua);"></i> All clear — no renewals due soon.</div>
+  )}
+</div>
+
+<!-- ══════════════════════════════════════
+     SECTION 2 — RE-RUN PIPELINE
+══════════════════════════════════════ -->
+<div id="rerun" class="pl-section">
+  <div class="pl-section-head">
+    <div style="width:3px;height:18px;border-radius:2px;background:var(--aqua);flex-shrink:0;"></div>
+    <h5>Re-run Opportunities</h5>
+    <span class="pl-count">{rerun_current.length + rerun_upcoming.length + rerun_missed.length} clients</span>
+    <span style="font-size:0.72rem;color:#c4c4cc;margin-left:4px;">One-time clients due for outreach</span>
+  </div>
+
+  {rerun_current.length > 0 && (
+    <div class="pl-group">
+      <div class="pl-group-label green">
+        <i class="bi bi-record-circle-fill"></i>
+        Reach out now
+      </div>
+      <div class="pl-card accent-green">
+        <table class="pl-table">
+          <thead>
+            <tr>
+              <th>Client</th>
+              <th class="col-date">Contact Window</th>
+              <th class="col-action"></th>
+            </tr>
+          </thead>
+          <tbody id="rerunCurrentBlock">
+            {rerun_current.map(r => (
+              <tr class="row-green">
+                <td>
+                  <a href={`/client/${r.client.id}`} class="pl-client-name">{r.client.company_name}</a>
+                  {r.client.contact_email && <div class="pl-client-email">{r.client.contact_email}</div>}
+                </td>
+                <td style="font-weight:600;color:#1a9e80;">{r.rerun_label}</td>
+                <td><a href={`/client/${r.client.id}`} class="btn-tbl-view">View</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )}
+
+  {rerun_upcoming.length > 0 && (
+    <div id="rerunUpcomingBlock" class="pl-group">
+      <div class="pl-group-label">
+        Upcoming &mdash; <span id="rerunUpcomingCount">{rerun_upcoming.length}</span> client{rerun_upcoming.length !== 1 ? 's' : ''}
+      </div>
+      <div class="pl-card">
+        <table class="pl-table">
+          <thead>
+            <tr>
+              <th>Client</th>
+              <th class="col-date">Contact Window</th>
+              <th class="col-tag">Days Away</th>
+              <th class="col-action"></th>
+            </tr>
+          </thead>
+          <tbody id="rerunUpcomingRows">
+            {rerun_upcoming.map(r => {
+              const duCls = r.days_until > 60 ? 'pt-green' : r.days_until > 30 ? 'pt-orange' : 'pt-red';
+              const trCls = r.days_until > 60 ? '' : r.days_until > 30 ? 'row-orange' : 'row-red';
+              return (
+                <tr class={trCls} data-days={r.days_until}>
+                  <td>
+                    <a href={`/client/${r.client.id}`} class="pl-client-name">{r.client.company_name}</a>
+                    {r.client.contact_email && <div class="pl-client-email">{r.client.contact_email}</div>}
+                  </td>
+                  <td style="color:#555;">{r.rerun_label}</td>
+                  <td><span class={`pl-tag ${duCls}`}>{r.days_until}d away</span></td>
+                  <td><a href={`/client/${r.client.id}`} class="btn-tbl-view">View</a></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )}
+
+  <div id="rerunEmptyMsg" style="display:none;">
+    <div class="pl-empty"><i class="bi bi-check-circle" style="color:var(--aqua);"></i> <span id="rerunEmptyText">No outreach opportunities in this window.</span></div>
+  </div>
+
+  {rerun_missed.length > 0 && (
+    <div class="pl-group">
+      <div class="pl-group-label orange">
+        <i class="bi bi-clock-history"></i>
+        Window passed &mdash; still worth reaching out
+      </div>
+      <div class="pl-card accent-orange">
+        <table class="pl-table">
+          <thead>
+            <tr>
+              <th>Client</th>
+              <th class="col-date">Window Was</th>
+              <th class="col-tag">Missed By</th>
+              <th class="col-action"></th>
+            </tr>
+          </thead>
+          <tbody id="rerunMissedBlock">
+            {rerun_missed.map(r => (
+              <tr>
+                <td>
+                  <a href={`/client/${r.client.id}`} class="pl-client-name">{r.client.company_name}</a>
+                  {r.client.contact_email && <div class="pl-client-email">{r.client.contact_email}</div>}
+                </td>
+                <td style="color:#c97a30;">{r.rerun_label}</td>
+                <td><span class="pl-tag pt-orange">{Math.abs(r.days_until)}d ago</span></td>
+                <td><a href={`/client/${r.client.id}`} class="btn-tbl-view">View</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )}
+
+  {rerun_current.length === 0 && rerun_upcoming.length === 0 && rerun_missed.length === 0 && (
+    <div class="pl-empty"><i class="bi bi-check-circle" style="color:var(--aqua);"></i> No outreach opportunities at this time.</div>
+  )}
+</div>
+
+</div><!-- end pl-wrap (list view) -->
+
+<!-- ══════════════════════════════════════
+     KANBAN BOARD VIEW
+══════════════════════════════════════ -->
+<div id="boardView" class="pl-wrap" style="display:none; max-width:none;">
+
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
+    <div style="width:3px;height:18px;border-radius:2px;background:var(--midnight);flex-shrink:0;"></div>
+    <span style="font-size:0.92rem;font-weight:700;color:var(--midnight);">Pipeline Board</span>
+    <span style="font-size:0.7rem;color:#aaa;margin-left:4px;">All active renewals & re-runs by urgency</span>
+  </div>
+
+  <div class="kanban-board">
+
+    <!-- Overdue -->
+    <div class="kanban-col">
+      <div class="kanban-col-head" style="color:var(--fit-red);">
+        <span><i class="bi bi-exclamation-circle-fill me-1"></i>Overdue</span>
+        <span class="kc-count">{kanbanOverdue.length}</span>
+      </div>
+      <div class="kanban-col-body">
+        {kanbanOverdue.length > 0 ? kanbanOverdue.map((c: KanbanCard) => (
+        <a class="kanban-card kc-red" href={`/client/${c.id}?back=${encodeURIComponent('/renewals')}`}>
+          <div class="kanban-card-name">{c.name}</div>
+          <div class="kanban-card-meta">{c.meta}</div>
+          <span class={`kanban-card-tag ${c.tagCls}`}>{c.tag}</span>
+        </a>
+        )) : <div class="kanban-empty">None overdue</div>}
+      </div>
+    </div>
+
+    <!-- This Month / Open -->
+    <div class="kanban-col">
+      <div class="kanban-col-head" style="color:var(--orange);">
+        <span><i class="bi bi-lightning-charge-fill me-1"></i>Act Now</span>
+        <span class="kc-count">{kanbanThisMonth.length}</span>
+      </div>
+      <div class="kanban-col-body">
+        {kanbanThisMonth.length > 0 ? kanbanThisMonth.map((c: KanbanCard) => (
+        <a class={`kanban-card ${c.cardCls}`} href={`/client/${c.id}?back=${encodeURIComponent('/renewals')}`}>
+          <div class="kanban-card-name">{c.name}</div>
+          <div class="kanban-card-meta">{c.meta}</div>
+          <span class={`kanban-card-tag ${c.tagCls}`}>{c.tag}</span>
+        </a>
+        )) : <div class="kanban-empty">Nothing urgent</div>}
+      </div>
+    </div>
+
+    <!-- 30–60 days -->
+    <div class="kanban-col">
+      <div class="kanban-col-head" style="color:#c0a000;">
+        <span><i class="bi bi-clock me-1"></i>30–60 days</span>
+        <span class="kc-count">{kanban30d.length}</span>
+      </div>
+      <div class="kanban-col-body">
+        {kanban30d.length > 0 ? kanban30d.map((c: KanbanCard) => (
+        <a class={`kanban-card ${c.cardCls}`} href={`/client/${c.id}?back=${encodeURIComponent('/renewals')}`}>
+          <div class="kanban-card-name">{c.name}</div>
+          <div class="kanban-card-meta">{c.meta}</div>
+          <span class={`kanban-card-tag ${c.tagCls}`}>{c.tag}</span>
+        </a>
+        )) : <div class="kanban-empty">Nothing here</div>}
+      </div>
+    </div>
+
+    <!-- 60–90 days -->
+    <div class="kanban-col">
+      <div class="kanban-col-head" style="color:#1a9e80;">
+        <span><i class="bi bi-calendar3 me-1"></i>60–90 days</span>
+        <span class="kc-count">{kanban60d.length}</span>
+      </div>
+      <div class="kanban-col-body">
+        {kanban60d.length > 0 ? kanban60d.map((c: KanbanCard) => (
+        <a class={`kanban-card ${c.cardCls}`} href={`/client/${c.id}?back=${encodeURIComponent('/renewals')}`}>
+          <div class="kanban-card-name">{c.name}</div>
+          <div class="kanban-card-meta">{c.meta}</div>
+          <span class={`kanban-card-tag ${c.tagCls}`}>{c.tag}</span>
+        </a>
+        )) : <div class="kanban-empty">Nothing here</div>}
+      </div>
+    </div>
+
+    <!-- 90d+ -->
+    <div class="kanban-col">
+      <div class="kanban-col-head" style="color:#9ca3af;">
+        <span><i class="bi bi-hourglass-split me-1"></i>90+ days</span>
+        <span class="kc-count">{kanban90d.length}</span>
+      </div>
+      <div class="kanban-col-body">
+        {kanban90d.length > 0 ? kanban90d.map((c: KanbanCard) => (
+        <a class={`kanban-card ${c.cardCls}`} href={`/client/${c.id}?back=${encodeURIComponent('/renewals')}`}>
+          <div class="kanban-card-name">{c.name}</div>
+          <div class="kanban-card-meta">{c.meta}</div>
+          <span class={`kanban-card-tag ${c.tagCls}`}>{c.tag}</span>
+        </a>
+        )) : <div class="kanban-empty">Nothing here</div>}
+      </div>
+    </div>
+
+  </div>
+</div><!-- end board view -->
+
+<script is:inline>
+function setWindow(days) {
+  // Update button styles
+  [30, 60, 90].forEach(d => {
+    const btn = document.getElementById('btn' + d);
+    if (!btn) return;
+    btn.className = d === days ? 'btn-vfit' : 'btn-vfit-ghost';
+    btn.style.cssText = 'font-size:0.75rem;padding:4px 12px;';
+  });
+
+  // Filter sub_upcoming rows
+  const subRows = document.querySelectorAll('#subUpcomingRows tr[data-days]');
+  let visibleSub = 0;
+  subRows.forEach(row => {
+    const d = parseInt(row.dataset.days);
+    if (d <= days) { row.style.display = ''; visibleSub++; }
+    else { row.style.display = 'none'; }
+  });
+  const subBlock = document.getElementById('subUpcomingBlock');
+  const subCnt = document.getElementById('subUpcomingCount');
+  const subEmpty = document.getElementById('subEmptyMsg');
+  const subEmptyTxt = document.getElementById('subEmptyText');
+  if (subBlock) subBlock.style.display = visibleSub > 0 ? '' : 'none';
+  if (subCnt) subCnt.textContent = visibleSub;
+  const hasSubOverdue = document.querySelectorAll('#subOverdueBlock tr').length > 0;
+  if (subEmpty) {
+    const showEmpty = visibleSub === 0 && !hasSubOverdue;
+    subEmpty.style.display = showEmpty ? '' : 'none';
+    if (subEmptyTxt) subEmptyTxt.textContent = `No subscription renewals due within ${days} days.`;
+  }
+
+  // Filter rerun_upcoming rows
+  const rerunRows = document.querySelectorAll('#rerunUpcomingRows tr[data-days]');
+  let visibleRerun = 0;
+  rerunRows.forEach(row => {
+    const d = parseInt(row.dataset.days);
+    if (d <= days) { row.style.display = ''; visibleRerun++; }
+    else { row.style.display = 'none'; }
+  });
+  const rerunBlock = document.getElementById('rerunUpcomingBlock');
+  const rerunCnt = document.getElementById('rerunUpcomingCount');
+  const rerunEmpty = document.getElementById('rerunEmptyMsg');
+  const rerunEmptyTxt = document.getElementById('rerunEmptyText');
+  if (rerunBlock) rerunBlock.style.display = visibleRerun > 0 ? '' : 'none';
+  if (rerunCnt) rerunCnt.textContent = visibleRerun;
+  const hasRerunCurrent = document.querySelectorAll('#rerunCurrentBlock tr').length > 0;
+  const hasRerunMissed = document.querySelectorAll('#rerunMissedBlock tr').length > 0;
+  if (rerunEmpty) {
+    const showEmpty = visibleRerun === 0 && !hasRerunCurrent && !hasRerunMissed;
+    rerunEmpty.style.display = showEmpty ? '' : 'none';
+    if (rerunEmptyTxt) rerunEmptyTxt.textContent = `No one-time re-run opportunities within ${days} days.`;
+  }
+
+  history.replaceState(null, '', days === 90 ? location.pathname : location.pathname + '?days=' + days);
+}
+window.setWindow = setWindow;
+
+// Init: read URL param or default to 90
+const initDays = parseInt(new URLSearchParams(window.location.search).get('days') || '90');
+setWindow([30, 60, 90].includes(initDays) ? initDays : 90);
+
+function switchView(view) {
+  var listView  = document.querySelector('.pl-wrap');
+  var boardView = document.getElementById('boardView');
+  var btnList   = document.getElementById('btnViewList');
+  var btnBoard  = document.getElementById('btnViewBoard');
+  if (!listView || !boardView) return;
+  if (view === 'board') {
+    listView.style.display  = 'none';
+    boardView.style.display = '';
+    btnList.classList.remove('active');
+    btnBoard.classList.add('active');
+  } else {
+    listView.style.display  = '';
+    boardView.style.display = 'none';
+    btnList.classList.add('active');
+    btnBoard.classList.remove('active');
+  }
+}
+window.switchView = switchView;
+</script>
+
+</BaseLayout>

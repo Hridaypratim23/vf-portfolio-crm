@@ -1,0 +1,740 @@
+---
+export const prerender = true;
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const AVATAR_COLORS = ['#0ba882','#3b5bdb','#e8900a','#6741d9','#f15162','#0d9adb','#2d9c4e','#c2255c','#1971c2','#5c7cfa'];
+function tmColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (name.charCodeAt(i) + ((h << 5) - h)) | 0;
+  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
+}
+function tmInitials(name: string): string {
+  return name.replace(/[(&)]/g, ' ').split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]).join('').toUpperCase();
+}
+
+const salesDocs = [
+  { href: 'https://vantagecircle-my.sharepoint.com/:b:/p/sneha_bhagabati/IQD30iyIiy41SqBNjvYVVwh3AVXhlIwNhoUXQK5EV0wsgiU?e=5zP50l', name: 'Vfit Sales Deck', type: 'PDF', color: '#d93025', bg: 'rgba(217,48,37,0.08)', action: 'open' },
+  { href: '/docs/sales-enablement/client-onboarding-document.pdf', name: 'Client Onboarding Document', type: 'PDF', color: '#d93025', bg: 'rgba(217,48,37,0.08)', action: 'open' },
+];
+
+const cxDocs = [
+  { href: '/docs/vfit-user-guide.pdf',             name: 'Vfit User Guide',           type: 'PDF',  color: '#d93025', bg: 'rgba(217,48,37,0.08)',   action: 'open'     },
+  { href: '/docs/vfit-implementation-guide.pdf',   name: 'Implementation Guide',      type: 'PDF',  color: '#d93025', bg: 'rgba(217,48,37,0.08)',   action: 'open'     },
+  { href: '/docs/vfit-faq.pdf',                    name: 'FAQ Document',              type: 'PDF',  color: '#d93025', bg: 'rgba(217,48,37,0.08)',   action: 'open'     },
+  { href: '/docs/vfit-introduction.pdf',           name: 'Introduction to Vfit',      type: 'PDF',  color: '#d93025', bg: 'rgba(217,48,37,0.08)',   action: 'open'     },
+  { href: '/docs/vfit-task-details.pdf',           name: 'Task Details',              type: 'PDF',  color: '#d93025', bg: 'rgba(217,48,37,0.08)',   action: 'open'     },
+  { href: '/docs/vfit-presentation.pdf',           name: 'Vantage Fit Presentation',  type: 'PDF',  color: '#d93025', bg: 'rgba(217,48,37,0.08)',   action: 'open'     },
+  { href: '/docs/vfit-sample-employee-data.csv',   name: 'Sample Employee Data',      type: 'CSV',  color: '#0f9d58', bg: 'rgba(15,157,88,0.08)',   action: 'download' },
+  { href: '/docs/vfit-challenge-plan-scores.xlsx', name: 'Sample Challenge Plan',     type: 'XLSX', color: '#1e7e34', bg: 'rgba(30,126,52,0.08)',   action: 'download' },
+  { href: '/docs/vfit-step-challenges.docx',       name: 'Types of Step Challenges',  type: 'DOCX', color: '#1a73e8', bg: 'rgba(26,115,232,0.08)',  action: 'download' },
+];
+
+const videoTestimonials = [
+  { href: 'https://youtu.be/lJNFjACUpxE?si=dC_GLtjRFngqflBF', name: 'Landmark Group',          thumb: '/docs/video-testimonials/landmark-group.png' },
+  { href: 'https://youtu.be/L_39IykL-O4?si=VjPa4k7_AricxJfe', name: 'BWC Building Society',    thumb: '/docs/video-testimonials/bwc-building-society.png' },
+  { href: 'https://youtu.be/FZm24QAjB8w?si=ol09y35co8Pp44Yx', name: 'Reflex Technology Group', thumb: '/docs/video-testimonials/reflex-technology-group.png' },
+];
+
+const testimonials = [
+  { pdf: '/docs/testimonials/Anunta_Tech_Testimonial.pdf',                    name: 'Anunta Tech' },
+  { pdf: '/docs/testimonials/ArtKhoj_Testimonial.pdf',                        name: 'ArtKhoj' },
+  { pdf: '/docs/testimonials/ArtKhoj1_Testimonial.pdf',                       name: 'ArtKhoj (2)' },
+  { pdf: '/docs/testimonials/Artkhoj_2_Testimonial.pdf',                      name: 'ArtKhoj (3)' },
+  { pdf: '/docs/testimonials/Avalon_Consulting_Testimonial.pdf',               name: 'Avalon Consulting' },
+  { pdf: '/docs/testimonials/Beroe_Testimonial.pdf',                           name: 'Beroe' },
+  { pdf: '/docs/testimonials/Celegence_Testimonial.pdf',                       name: 'Celegence' },
+  { pdf: '/docs/testimonials/Checkmarx_Testimonial.pdf',                       name: 'Checkmarx' },
+  { pdf: '/docs/testimonials/Coach_Pyry_Testimonial.pdf',                      name: 'Coach Pyry' },
+  { pdf: '/docs/testimonials/Compare_and_ConnectTestimonial.pdf',              name: 'Compare and Connect' },
+  { pdf: '/docs/testimonials/Dudley_Building_SocietyTestimonial.pdf',          name: 'Dudley Building Society' },
+  { pdf: '/docs/testimonials/EngagedlyTestimonial.pdf',                        name: 'Engagedly' },
+  { pdf: '/docs/testimonials/Grid_India_testimonial.pdf',                      name: 'Grid India' },
+  { pdf: '/docs/testimonials/Heidrick_and_Struggles_Testimonial.pdf',          name: 'Heidrick & Struggles' },
+  { pdf: '/docs/testimonials/ISKL_Testimonial.pdf',                            name: 'ISKL' },
+  { pdf: '/docs/testimonials/Keva_Flavours_Testimonial.pdf',                   name: 'Keva Flavours' },
+  { pdf: '/docs/testimonials/Marinus_Pharma_Testimonial.pdf',                  name: 'Marinus Pharma' },
+  { pdf: '/docs/testimonials/Mindsprint_-_Testimonial.pdf',                    name: 'Mindsprint' },
+  { pdf: '/docs/testimonials/Momentum_Testimonial.pdf',                        name: 'Momentum' },
+  { pdf: '/docs/testimonials/Niche_TechnologyTestimonial.pdf',                 name: 'Niche Technology' },
+  { pdf: '/docs/testimonials/RTG_Testimonial.pdf',                             name: 'RTG' },
+  { pdf: '/docs/testimonials/Ruby_Digital_Solution_Testimonial.pdf',           name: 'Ruby Digital Solution' },
+  { pdf: '/docs/testimonials/Teva_Testimonial_for_Vantage_Fit_16102025.pdf',   name: 'Teva' },
+  { pdf: '/docs/testimonials/Valeo_Testimonial.pdf',                           name: 'Valeo' },
+  { pdf: '/docs/testimonials/Wipro_Testimonialdocx.pdf',                       name: 'Wipro' },
+];
+---
+
+<BaseLayout title="Repository">
+
+<div class="page-topbar">
+  <a href="/" class="back-link"><i class="bi bi-arrow-left"></i> <span>Dashboard</span></a>
+  <div style="width:1px;height:24px;background:#eee;"></div>
+  <p class="page-title mb-0">Document Repository</p>
+</div>
+
+<div class="repo-page">
+<div class="repo-wrap">
+
+  <!-- ══════════════════════════════════════
+       VIEW A — Folder list (default)
+  ══════════════════════════════════════════ -->
+  <div id="view-root">
+
+    <p class="repo-caption">{salesDocs.length + cxDocs.length + testimonials.length} documents &middot; 3 folders</p>
+
+    <div class="folders-grid">
+
+      <!-- Folder: CX Onboarding Kit -->
+      <button class="folder-card" onclick="openView('cx')">
+        <div class="fc-icon fc-amber">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M3 7C3 5.9 3.9 5 5 5H9.586a1 1 0 0 1 .707.293l1.414 1.414A1 1 0 0 0 12.414 7H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" fill="currentColor" opacity=".25"/>
+            <path d="M3 9C3 7.9 3.9 7 5 7H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z" fill="currentColor"/>
+          </svg>
+        </div>
+        <div class="fc-body">
+          <span class="fc-name">CX Onboarding Kit</span>
+          <span class="fc-desc">Guides, templates &amp; data files</span>
+        </div>
+        <div class="fc-foot">
+          <span class="fc-count">{cxDocs.length} files</span>
+          <span class="fc-open-lbl">Open <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z"/></svg></span>
+        </div>
+      </button>
+
+      <!-- Folder: Sales Enablement -->
+      <button class="folder-card" onclick="openView('sales')">
+        <div class="fc-icon fc-teal">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M3 7C3 5.9 3.9 5 5 5H9.586a1 1 0 0 1 .707.293l1.414 1.414A1 1 0 0 0 12.414 7H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" fill="currentColor" opacity=".25"/>
+            <path d="M3 9C3 7.9 3.9 7 5 7H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z" fill="currentColor"/>
+          </svg>
+        </div>
+        <div class="fc-body">
+          <span class="fc-name">Sales Enablement</span>
+          <span class="fc-desc">Sales deck &amp; onboarding documents</span>
+        </div>
+        <div class="fc-foot">
+          <span class="fc-count">{salesDocs.length} files</span>
+          <span class="fc-open-lbl">Open <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z"/></svg></span>
+        </div>
+      </button>
+
+      <!-- Folder: Testimonials -->
+      <button class="folder-card" onclick="openView('tm')">
+        <div class="fc-icon fc-indigo">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M3 7C3 5.9 3.9 5 5 5H9.586a1 1 0 0 1 .707.293l1.414 1.414A1 1 0 0 0 12.414 7H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" fill="currentColor" opacity=".25"/>
+            <path d="M3 9C3 7.9 3.9 7 5 7H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z" fill="currentColor"/>
+          </svg>
+        </div>
+        <div class="fc-body">
+          <span class="fc-name">Client Testimonials</span>
+          <span class="fc-desc">Signed letters from Vantage Fit clients</span>
+        </div>
+        <div class="fc-foot">
+          <span class="fc-count">{testimonials.length} files</span>
+          <span class="fc-open-lbl">Open <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z"/></svg></span>
+        </div>
+      </button>
+
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       VIEW D — Sales Enablement contents
+  ══════════════════════════════════════════ -->
+  <div id="view-sales" style="display:none;">
+
+    <div class="view-nav">
+      <button class="view-back" onclick="closeView()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0z"/></svg>
+        All folders
+      </button>
+      <div class="view-crumb">
+        <span class="crumb-sep">/</span>
+        <span class="crumb-current">Sales Enablement</span>
+      </div>
+    </div>
+
+    <div class="content-card">
+      <div class="content-hdr">
+        <div class="ch-icon ch-teal">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 9C3 7.9 3.9 7 5 7H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z" fill="currentColor"/></svg>
+        </div>
+        <span class="ch-title">Sales Enablement</span>
+        <span class="ch-count">{salesDocs.length} files</span>
+      </div>
+      <div class="doc-list">
+        {salesDocs.map(doc => (
+        <a
+          href={doc.href}
+          target="_blank"
+          rel="noopener"
+          class="doc-row"
+        >
+          <div class="doc-type-box" style={`background:${doc.bg};color:${doc.color};`}>
+            {doc.type}
+          </div>
+          <span class="doc-name">{doc.name}</span>
+          <span class="doc-action-btn">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8.636 3.5a.5.5 0 0 0-.5-.5H1.5A1.5 1.5 0 0 0 0 4.5v10A1.5 1.5 0 0 0 1.5 16h10a1.5 1.5 0 0 0 1.5-1.5V7.864a.5.5 0 0 0-1 0V14.5a.5.5 0 0 1-.5.5h-10a.5.5 0 0 1-.5-.5v-10a.5.5 0 0 1 .5-.5h6.636a.5.5 0 0 0 .5-.5z"/><path d="M16 .5a.5.5 0 0 0-.5-.5h-5a.5.5 0 0 0 0 1h3.793L6.146 9.146a.5.5 0 1 0 .708.708L15 1.707V5.5a.5.5 0 0 0 1 0v-5z"/></svg> Open
+          </span>
+        </a>
+        ))}
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══════════════════════════════════════
+       VIEW B — CX Onboarding Kit contents
+  ══════════════════════════════════════════ -->
+  <div id="view-cx" style="display:none;">
+
+    <div class="view-nav">
+      <button class="view-back" onclick="closeView()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0z"/></svg>
+        All folders
+      </button>
+      <div class="view-crumb">
+        <span class="crumb-sep">/</span>
+        <span class="crumb-current">CX Onboarding Kit</span>
+      </div>
+    </div>
+
+    <div class="content-card">
+      <div class="content-hdr">
+        <div class="ch-icon ch-amber">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 9C3 7.9 3.9 7 5 7H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z" fill="currentColor"/></svg>
+        </div>
+        <span class="ch-title">CX Onboarding Kit</span>
+        <span class="ch-count">{cxDocs.length} files</span>
+      </div>
+      <div class="doc-list">
+        {cxDocs.map(doc => (
+        <a
+          href={doc.href}
+          target={doc.action === 'open' ? '_blank' : undefined}
+          rel={doc.action === 'open' ? 'noopener' : undefined}
+          download={doc.action === 'download' ? '' : undefined}
+          class="doc-row"
+        >
+          <div class="doc-type-box" style={`background:${doc.bg};color:${doc.color};`}>
+            {doc.type}
+          </div>
+          <span class="doc-name">{doc.name}</span>
+          <span class="doc-action-btn">
+            {doc.action === 'open'
+              ? <><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8.636 3.5a.5.5 0 0 0-.5-.5H1.5A1.5 1.5 0 0 0 0 4.5v10A1.5 1.5 0 0 0 1.5 16h10a1.5 1.5 0 0 0 1.5-1.5V7.864a.5.5 0 0 0-1 0V14.5a.5.5 0 0 1-.5.5h-10a.5.5 0 0 1-.5-.5v-10a.5.5 0 0 1 .5-.5h6.636a.5.5 0 0 0 .5-.5z"/><path d="M16 .5a.5.5 0 0 0-.5-.5h-5a.5.5 0 0 0 0 1h3.793L6.146 9.146a.5.5 0 1 0 .708.708L15 1.707V5.5a.5.5 0 0 0 1 0v-5z"/></svg> Open</>
+              : <><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/><path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/></svg> Download</>
+            }
+          </span>
+        </a>
+        ))}
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══════════════════════════════════════
+       VIEW C — Testimonials contents
+  ══════════════════════════════════════════ -->
+  <div id="view-tm" style="display:none;">
+
+    <div class="view-nav">
+      <button class="view-back" onclick="closeView()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0z"/></svg>
+        All folders
+      </button>
+      <div class="view-crumb">
+        <span class="crumb-sep">/</span>
+        <span class="crumb-current">Client Testimonials</span>
+      </div>
+    </div>
+
+    <div class="content-card" style="margin-bottom:14px;">
+      <div class="content-hdr">
+        <div class="ch-icon ch-red">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M10 8l6 4-6 4V8z" fill="currentColor"/><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" stroke="currentColor" stroke-width="1.8" fill="none"/></svg>
+        </div>
+        <span class="ch-title">Video Testimonials</span>
+        <span class="ch-count">{videoTestimonials.length} videos</span>
+      </div>
+      <div class="vid-grid">
+        {videoTestimonials.map(v => (
+          <a href={v.href} target="_blank" rel="noopener" class="vid-card">
+            <div class="vid-thumb-wrap">
+              <img src={v.thumb} alt={v.name} class="vid-thumb" />
+              <div class="vid-play-overlay">
+                <div class="vid-play-btn">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                </div>
+              </div>
+              <div class="vid-gradient"></div>
+              <span class="vid-name">{v.name}</span>
+            </div>
+          </a>
+        ))}
+      </div>
+    </div>
+
+    <div class="content-card">
+      <div class="content-hdr">
+        <div class="ch-icon ch-indigo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 9C3 7.9 3.9 7 5 7H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z" fill="currentColor"/></svg>
+        </div>
+        <span class="ch-title">Text Testimonials</span>
+        <span class="ch-count">{testimonials.length} files</span>
+        <div class="tm-search-wrap">
+          <svg class="tm-search-ico" width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.099zm-5.242 1.656a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z"/></svg>
+          <input id="tmSearch" class="tm-search" placeholder="Search company…" autocomplete="off" />
+        </div>
+        <span id="tmCount" class="ch-count ch-count-right">{testimonials.length} results</span>
+      </div>
+
+      <div class="tm-grid" id="tmGrid">
+        {testimonials.map(t => (
+        <a href={t.pdf} target="_blank" rel="noopener" class="tm-card" data-name={t.name.toLowerCase()}>
+          <div class="tm-av" style={`background:${tmColor(t.name)}`}>{tmInitials(t.name)}</div>
+          <span class="tm-company">{t.name}</span>
+          <svg class="tm-arrow" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z"/></svg>
+        </a>
+        ))}
+      </div>
+
+      <div id="tmEmpty" class="tm-empty" style="display:none;">
+        <p>No companies match your search.</p>
+      </div>
+    </div>
+
+  </div>
+
+</div><!-- /repo-wrap -->
+</div><!-- /repo-page -->
+
+<style>
+/* ── Page shell ──────────────────────────────────────────────── */
+.repo-page {
+  background: #f3f4f8;
+  min-height: calc(100vh - 56px);
+  padding-bottom: 60px;
+}
+.repo-wrap {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 26px 20px 0;
+}
+.repo-caption {
+  font-size: 0.72rem;
+  color: #9098a8;
+  margin: 0 0 14px 2px;
+}
+
+/* ══ Folder list grid ═════════════════════════════════════════ */
+.folders-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+/* ── Folder card ─────────────────────────────────────────────── */
+.folder-card {
+  background: #fff;
+  border: 1.5px solid #e2e6f2;
+  border-radius: 18px;
+  padding: 26px 22px 20px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  text-align: left;
+  transition: border-color 0.17s, box-shadow 0.17s, transform 0.17s;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+}
+.folder-card:hover {
+  border-color: #7b97fb;
+  box-shadow: 0 6px 28px rgba(74,99,224,0.12);
+  transform: translateY(-2px);
+}
+.folder-card:active { transform: translateY(0); }
+
+.fc-icon {
+  width: 60px; height: 60px;
+  border-radius: 16px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.fc-amber {
+  background: linear-gradient(140deg, #fff3cc, #ffe98c);
+  color: #b87a00;
+  border: 1px solid #fcd66e;
+}
+.fc-indigo {
+  background: linear-gradient(140deg, #eef0ff, #d8e0ff);
+  color: #4a63e0;
+  border: 1px solid #b0c2ff;
+}
+.fc-teal {
+  background: linear-gradient(140deg, #d8f5ef, #a8edd9);
+  color: #0ba882;
+  border: 1px solid #7dd9c0;
+}
+
+.fc-body { flex: 1; }
+.fc-name {
+  display: block;
+  font-size: 0.98rem; font-weight: 700;
+  color: #111827;
+  margin-bottom: 5px;
+}
+.fc-desc {
+  font-size: 0.72rem;
+  color: #9098a8;
+  line-height: 1.4;
+}
+
+.fc-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.fc-count {
+  font-size: 0.7rem; font-weight: 600;
+  color: #b0b8cc;
+  background: #f2f4f9;
+  border-radius: 20px;
+  padding: 3px 10px;
+}
+.fc-open-lbl {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 0.73rem; font-weight: 700;
+  color: #4a63e0;
+}
+
+/* ══ Folder view nav (breadcrumb + back) ═════════════════════ */
+.view-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.view-back {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 0.78rem; font-weight: 600;
+  color: #4a63e0;
+  background: rgba(74,99,224,0.08);
+  border: none; border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.13s;
+}
+.view-back:hover { background: rgba(74,99,224,0.14); }
+
+.view-crumb {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 0.75rem;
+}
+.crumb-sep { color: #c8d0e0; }
+.crumb-current { font-weight: 600; color: #374151; }
+
+/* ══ Content card ════════════════════════════════════════════ */
+.content-card {
+  background: #fff;
+  border: 1px solid #e2e6f2;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+}
+
+/* ── Content header row ─────────────────────────────────────── */
+.content-hdr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 20px;
+  border-bottom: 1px solid #f0f2f8;
+  flex-wrap: wrap;
+}
+.ch-icon {
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.ch-amber { background: rgba(184,122,0,0.10); color: #b87a00; }
+.ch-indigo { background: rgba(74,99,224,0.10); color: #4a63e0; }
+.ch-teal  { background: rgba(11,168,130,0.10); color: #0ba882; }
+.ch-red   { background: rgba(217,45,74,0.10);  color: #d92d4a; }
+.ch-title {
+  font-size: 0.88rem; font-weight: 700;
+  color: #111827; flex: 1;
+}
+.ch-count {
+  font-size: 0.67rem; font-weight: 600;
+  color: #9098a8;
+  background: #f2f4f9;
+  border-radius: 20px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+.ch-count-right { margin-left: auto; }
+
+/* ══ Document list (CX) ══════════════════════════════════════ */
+.doc-list { padding: 4px 0; }
+
+.doc-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 20px;
+  text-decoration: none !important;
+  border-bottom: 1px solid #f4f5fb;
+  transition: background 0.12s;
+}
+.doc-row:last-child { border-bottom: none; }
+.doc-row:hover { background: #f8f9ff; }
+
+.doc-type-box {
+  width: 42px; height: 32px;
+  border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.56rem; font-weight: 900;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+.doc-name {
+  flex: 1;
+  font-size: 0.855rem; font-weight: 600;
+  color: #1a2535;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.doc-action-btn {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 0.72rem; font-weight: 700;
+  color: #4a63e0;
+  background: rgba(74,99,224,0.07);
+  border-radius: 8px;
+  padding: 5px 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.13s;
+}
+.doc-row:hover .doc-action-btn { background: rgba(74,99,224,0.13); }
+
+/* ══ Video testimonials ══════════════════════════════════════ */
+.vid-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  padding: 16px;
+}
+.vid-card {
+  display: block;
+  text-decoration: none !important;
+  border-radius: 14px;
+  overflow: hidden;
+  border: none;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.10);
+  transition: box-shadow 0.18s, transform 0.18s;
+}
+.vid-card:hover {
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  transform: translateY(-3px);
+}
+.vid-thumb-wrap {
+  position: relative;
+  aspect-ratio: 16/9;
+  overflow: hidden;
+  background: #111;
+}
+.vid-thumb {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.22s;
+}
+.vid-card:hover .vid-thumb { transform: scale(1.04); }
+.vid-play-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.vid-play-btn {
+  width: 54px; height: 54px;
+  background: rgba(255,255,255,0.92);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #e00;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.30);
+  transition: transform 0.18s, background 0.18s;
+  padding-left: 4px;
+}
+.vid-card:hover .vid-play-btn {
+  transform: scale(1.12);
+  background: #fff;
+}
+.vid-gradient {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 52%;
+  background: linear-gradient(to top, rgba(0,0,0,0.68) 0%, transparent 100%);
+  pointer-events: none;
+}
+.vid-name {
+  position: absolute;
+  bottom: 11px; left: 13px; right: 13px;
+  font-size: 0.82rem; font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ══ Testimonial grid ════════════════════════════════════════ */
+.tm-search-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 160px;
+  max-width: 260px;
+}
+.tm-search-ico {
+  position: absolute;
+  left: 10px; top: 50%;
+  transform: translateY(-50%);
+  color: #b8c0d4;
+  pointer-events: none;
+}
+.tm-search {
+  width: 100%;
+  border: 1.5px solid #e4e8f2;
+  border-radius: 9px;
+  padding: 7px 12px 7px 30px;
+  font-size: 0.78rem; color: #1a2535;
+  background: #f6f8fc;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.14s, background 0.14s, box-shadow 0.14s;
+}
+.tm-search:focus {
+  border-color: #4a63e0;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(74,99,224,0.09);
+}
+
+.tm-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  padding: 14px;
+  gap: 8px;
+}
+.tm-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  background: #fafbfd;
+  border: 1.5px solid #eaecf4;
+  border-radius: 11px;
+  text-decoration: none !important;
+  transition: border-color 0.14s, background 0.14s, box-shadow 0.14s;
+}
+.tm-card:hover {
+  border-color: #9ab0ff;
+  background: #f4f6ff;
+  box-shadow: 0 3px 14px rgba(74,99,224,0.10);
+}
+.tm-av {
+  width: 36px; height: 36px;
+  border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.63rem; font-weight: 800;
+  color: #fff; flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+.tm-company {
+  flex: 1;
+  font-size: 0.79rem; font-weight: 600;
+  color: #111827;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tm-arrow {
+  color: #c8d0e4;
+  flex-shrink: 0;
+  transition: color 0.13s;
+}
+.tm-card:hover .tm-arrow { color: #4a63e0; }
+.tm-card.hidden { display: none; }
+
+.tm-empty {
+  text-align: center;
+  padding: 36px 20px;
+  font-size: 0.82rem;
+  color: #9098a8;
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 767px) {
+  .repo-wrap { padding: 16px 12px 0; }
+  .folders-grid { grid-template-columns: 1fr; }
+  .folder-card { flex-direction: row; align-items: center; padding: 18px 16px; gap: 14px; }
+  .fc-icon { width: 48px; height: 48px; border-radius: 13px; }
+  .fc-body { flex: 1; }
+  .fc-foot { flex-direction: column; align-items: flex-end; gap: 4px; }
+  .vid-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; padding: 12px; }
+  .tm-grid { grid-template-columns: repeat(2, 1fr); padding: 10px; gap: 7px; }
+  .content-hdr { gap: 8px; }
+  .tm-search-wrap { min-width: 100%; order: 10; }
+}
+@media (max-width: 440px) {
+  .vid-grid { grid-template-columns: 1fr; }
+  .tm-grid { grid-template-columns: 1fr; }
+}
+</style>
+
+<script is:inline>
+(function () {
+  var root      = document.getElementById('view-root');
+  var viewCx    = document.getElementById('view-cx');
+  var viewTm    = document.getElementById('view-tm');
+  var viewSales = document.getElementById('view-sales');
+
+  window.openView = function (which) {
+    root.style.display      = 'none';
+    viewCx.style.display    = which === 'cx'    ? 'block' : 'none';
+    viewTm.style.display    = which === 'tm'    ? 'block' : 'none';
+    viewSales.style.display = which === 'sales' ? 'block' : 'none';
+    window.scrollTo(0, 0);
+  };
+  window.closeView = function () {
+    root.style.display      = 'block';
+    viewCx.style.display    = 'none';
+    viewTm.style.display    = 'none';
+    viewSales.style.display = 'none';
+    window.scrollTo(0, 0);
+  };
+
+  /* testimonial search */
+  var searchEl = document.getElementById('tmSearch');
+  var countEl  = document.getElementById('tmCount');
+  var emptyEl  = document.getElementById('tmEmpty');
+  if (searchEl) {
+    searchEl.addEventListener('input', function () {
+      var q = this.value.trim().toLowerCase();
+      var cards = document.querySelectorAll('#tmGrid .tm-card');
+      var n = 0;
+      cards.forEach(function (c) {
+        var show = !q || c.dataset.name.includes(q);
+        c.classList.toggle('hidden', !show);
+        if (show) n++;
+      });
+      if (countEl) countEl.textContent = n + ' result' + (n === 1 ? '' : 's');
+      if (emptyEl) emptyEl.style.display = n === 0 ? 'block' : 'none';
+    });
+  }
+})();
+</script>
+
+</BaseLayout>

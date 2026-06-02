@@ -1,0 +1,408 @@
+---
+import Sidebar from '../components/Sidebar.astro';
+interface Props { title?: string }
+const { title = 'Vantage Fit CRM' } = Astro.props;
+---
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title} – Vantage Fit CRM</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+  <!-- Preconnect: establish TCP+TLS to CDN origins before first request -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+  <!-- Critical CSS inline (blocks render intentionally — tiny) -->
+  <link rel="stylesheet" href="/static/style.css?v=3" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+
+  <!-- Non-render-blocking: fonts and icons load after paint -->
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" onload="this.onload=null;this.rel='stylesheet'" />
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" /></noscript>
+
+  <link rel="preload" as="style" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" onload="this.onload=null;this.rel='stylesheet'" />
+  <noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" /></noscript>
+</head>
+<body>
+  <!-- Mobile hamburger -->
+  <button class="mob-menu-btn" id="mobMenuBtn" type="button" aria-label="Open menu">
+    <i class="bi bi-list"></i>
+  </button>
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <!-- ── Command Palette ─────────────────────────────────────────────── -->
+  <div id="cmdPalette" class="cmd-overlay" style="display:none;" aria-modal="true" aria-label="Command palette">
+    <div class="cmd-modal">
+      <div class="cmd-search-wrap">
+        <i class="bi bi-search cmd-search-icon"></i>
+        <input type="text" id="cmdInput" class="cmd-input" placeholder="Search by name, FY 26-27, outside India, churn…" autocomplete="off" spellcheck="false" />
+        <kbd class="cmd-esc-hint">ESC</kbd>
+      </div>
+      <div class="cmd-results" id="cmdResults"></div>
+      <div class="cmd-footer">
+        <span><kbd>↑↓</kbd> navigate</span>
+        <span><kbd>↵</kbd> open</span>
+        <span><kbd>ESC</kbd> close</span>
+        <span style="margin-left:auto;"><kbd>⌘K</kbd> anywhere</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Toast container ───────────────────────────────────────────────── -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <div class="crm-layout">
+    <Sidebar />
+    <div class="crm-main">
+      <slot />
+    </div>
+  </div>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+  <script is:inline>
+  // ── Toast system ─────────────────────────────────────────────────────
+  (function() {
+    var ICONS = { success:'bi-check-circle-fill', error:'bi-exclamation-triangle-fill', warn:'bi-bell-fill', info:'bi-info-circle-fill' };
+    function showToast(msg, type, duration) {
+      type     = type     || 'success';
+      duration = duration || 4000;
+      var c = document.getElementById('toastContainer');
+      if (!c) return;
+      var t = document.createElement('div');
+      t.className = 'toast-pill toast-' + type;
+      t.innerHTML = '<i class="bi ' + (ICONS[type]||ICONS.success) + ' toast-icon"></i>' +
+                    '<span>' + msg + '</span>' +
+                    '<button class="toast-close" onclick="this.parentElement.remove()">×</button>';
+      c.appendChild(t);
+      requestAnimationFrame(function(){ t.classList.add('toast-show'); });
+      setTimeout(function(){
+        t.classList.remove('toast-show');
+        setTimeout(function(){ t.remove(); }, 320);
+      }, duration);
+    }
+    window.showToast = showToast;
+    // Legacy compat for rebuild banner
+    window.showRebuildBanner = function(msg) { showToast(msg, 'success'); };
+    window._showRebuildBanner = window.showRebuildBanner;
+
+    // Show toast from ?toast= URL param
+    var params = new URLSearchParams(window.location.search);
+    var tp = params.get('toast');
+    if (tp) {
+      var msgs = { added:'Client added successfully', updated:'Client updated successfully', deleted:'Client deleted' };
+      showToast(msgs[tp] || tp, tp === 'deleted' ? 'warn' : 'success');
+      params.delete('toast');
+      history.replaceState(null, '', window.location.pathname + (params.toString() ? '?' + params : ''));
+    }
+  })();
+  </script>
+
+  <script is:inline>
+  // ── Sidebar (mobile) ────────────────────────────────────────────────
+  (function () {
+    var btn     = document.getElementById('mobMenuBtn');
+    var overlay = document.getElementById('sidebarOverlay');
+    var sidebar = document.querySelector('.crm-sidebar');
+    var close_  = document.getElementById('sidebarCloseBtn');
+    if (!btn || !sidebar) return;
+    function open()  { sidebar.classList.add('sidebar-open');    overlay.classList.add('active');    document.body.style.overflow = 'hidden'; }
+    function close() { sidebar.classList.remove('sidebar-open'); overlay.classList.remove('active'); document.body.style.overflow = ''; }
+    btn.addEventListener('click', open);
+    overlay.addEventListener('click', close);
+    if (close_) close_.addEventListener('click', close);
+    sidebar.querySelectorAll('a, .sidebar-cta').forEach(function(el) {
+      el.addEventListener('click', function() { if (window.innerWidth <= 767) close(); });
+    });
+  })();
+  </script>
+
+  <script is:inline>
+  // ── Async form handler ───────────────────────────────────────────────
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('form[data-async]').forEach(function (form) {
+      form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        var btn = form.querySelector('[type=submit]');
+        var orig = btn ? btn.textContent : '';
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+        try {
+          var res  = await fetch(form.action, { method:'POST', body: new FormData(form), credentials:'same-origin' });
+          var text = await res.text();
+          if (text.trim().startsWith('<')) throw new Error('[' + res.status + '] Server error. URL: ' + res.url);
+          var data = JSON.parse(text);
+          if (!res.ok || data.error) throw new Error(data.error || 'Request failed');
+          if (data.redirect) { window.location.href = data.redirect; return; }
+          window.showToast(form.dataset.successMsg || 'Saved!', 'success');
+          if (form.dataset.reset) form.reset();
+          if (btn) { btn.disabled = false; btn.textContent = orig; }
+        } catch (err) {
+          window.showToast('Error: ' + err.message, 'error', 7000);
+          if (btn) { btn.disabled = false; btn.textContent = orig; }
+        }
+      });
+    });
+  });
+  </script>
+
+  <script is:inline>
+  // ── Command Palette ──────────────────────────────────────────────────
+  (function() {
+    var overlay = document.getElementById('cmdPalette');
+    var input   = document.getElementById('cmdInput');
+    var results = document.getElementById('cmdResults');
+    if (!overlay || !input || !results) return;
+
+    var PAGES = [
+      { icon:'bi-house-fill',          label:'Dashboard',            sub:'Overview & analytics',          href:'/' },
+      { icon:'bi-people-fill',          label:'All Clients',          sub:'Browse all client records',     href:'/clients' },
+      { icon:'bi-person-fill-check',    label:'Active Clients',       sub:'Currently engaged clients',     href:'/clients?filter=active' },
+      { icon:'bi-calendar-check-fill',  label:'Renewals & Pipeline',  sub:'Subscription renewals & re-runs', href:'/renewals' },
+      { icon:'bi-graph-up-arrow',       label:'FY Revenue',           sub:'Financial year revenue table',  href:'/fy-revenue' },
+      { icon:'bi-folder2-open',         label:'Document Repository',  sub:'Agreements & testimonials',     href:'/repository' },
+      { icon:'bi-graph-up-arrow',       label:'Finance Data',         sub:'Revenue by FY · INR USD breakdown per client', href:'/finance-data' },
+      { icon:'bi-plus-circle-fill',     label:'Add New Client',       sub:'Create a new client record',    href:'/add' },
+    ];
+
+    var activeIdx = -1;
+    var _clientsFull = false;
+
+    // ── Smart filter: detects FY, region, type, status, currency queries ──
+    function filterClients(q) {
+      var clients = (window._cmdClients || []);
+      if (!q) return { matches: [], label: null, total: 0 };
+
+      var filtered = null, label = null;
+
+      // FY year: "FY 24", "FY24", "FY 26-27", "FY 2024"
+      var fyM = q.match(/fy[\s\-]?(\d{2,4})(?:[\s\-]+\d{2,4})?/i);
+      if (fyM) {
+        var fyNum = parseInt(fyM[1]);
+        if (fyNum < 100) fyNum += 2000;
+        filtered = clients.filter(function(c) { return (c.fy || []).indexOf(fyNum) >= 0; });
+        label = 'FY ' + (fyNum - 2000) + '-' + String(fyNum - 2000 + 1).padStart(2, '0');
+      }
+      // Outside India / RoW / international
+      else if (/outside.?india|row\b|international|abroad|overseas/i.test(q)) {
+        filtered = clients.filter(function(c) { return c.region && c.region !== 'India'; });
+        label = 'Outside India';
+      }
+      // India
+      else if (/^india\b/i.test(q)) {
+        filtered = clients.filter(function(c) { return !c.region || c.region === 'India'; });
+        label = 'India';
+      }
+      // Annual / subscription type
+      else if (/\bannual\b|\bsubscription\b/i.test(q)) {
+        filtered = clients.filter(function(c) {
+          var t = (c.type || '').toLowerCase();
+          return t.includes('annual') || t.includes('subscription');
+        });
+        label = 'Annual / Subscription';
+      }
+      // One-time type
+      else if (/one.?time/i.test(q)) {
+        filtered = clients.filter(function(c) {
+          return (c.type || '').toLowerCase().includes('one');
+        });
+        label = 'One-time';
+      }
+      // Status: churned
+      else if (/\bchurn(ed)?\b/i.test(q)) {
+        filtered = clients.filter(function(c) {
+          return (c.status || '').toLowerCase().includes('churn');
+        });
+        label = 'Churned';
+      }
+      // Status: inactive
+      else if (/\binactive\b/i.test(q)) {
+        filtered = clients.filter(function(c) {
+          return (c.status || '').toLowerCase().includes('inactive');
+        });
+        label = 'Inactive';
+      }
+      // Status: active (exact)
+      else if (/^active\b/i.test(q)) {
+        filtered = clients.filter(function(c) {
+          return (c.status || '').toLowerCase() === 'active';
+        });
+        label = 'Active';
+      }
+      // Currency
+      else if (/\b(usd|inr|eur|gbp|aed|sgd|cad|aud)\b/i.test(q)) {
+        var curM = q.match(/\b(usd|inr|eur|gbp|aed|sgd|cad|aud)\b/i);
+        var cur = curM[0].toUpperCase();
+        filtered = clients.filter(function(c) { return (c.currency || '').toUpperCase() === cur; });
+        label = cur + ' clients';
+      }
+
+      // Generic: search all fields
+      if (!filtered) {
+        filtered = clients.filter(function(c) {
+          return c.name.toLowerCase().includes(q) ||
+            (c.cid      || '').toLowerCase().includes(q) ||
+            (c.email    || '').toLowerCase().includes(q) ||
+            (c.status   || '').toLowerCase().includes(q) ||
+            (c.type     || '').toLowerCase().includes(q) ||
+            (c.region   || '').toLowerCase().includes(q) ||
+            (c.currency || '').toLowerCase().includes(q) ||
+            (c.employees|| '').includes(q);
+        });
+      }
+
+      return { matches: filtered.slice(0, 8), label: label, total: filtered.length };
+    }
+
+    function getRecentClients() {
+      try { return JSON.parse(localStorage.getItem('vfcrm_recent') || '[]'); } catch(e) { return []; }
+    }
+
+    function getItems(q) {
+      q = (q || '').trim().toLowerCase();
+      var pageMatches = PAGES.filter(function(p) {
+        return !q || p.label.toLowerCase().includes(q) || p.sub.toLowerCase().includes(q);
+      }).map(function(p) { return Object.assign({}, p, { type: 'page' }); });
+
+      if (!q) {
+        var recent = getRecentClients();
+        var recentItems = recent.map(function(c) {
+          return {
+            type: 'recent', icon: 'bi-clock-history',
+            label: c.name, sub: c.status || 'Client',
+            href: '/client/' + c.id + '?back=' + encodeURIComponent(window.location.pathname),
+          };
+        });
+        return recentItems.concat(pageMatches);
+      }
+
+      var result = filterClients(q);
+      var clientItems = result.matches.map(function(c) {
+        var parts = result.label
+          ? [result.label, c.status].filter(Boolean)
+          : [c.status, c.type, (c.region || 'India')].filter(Boolean);
+        return {
+          type: 'client', icon: 'bi-building', label: c.name,
+          sub: parts.join(' · '),
+          href: '/client/' + c.id + '?back=' + encodeURIComponent(window.location.pathname),
+        };
+      });
+
+      var overflow = result.total > 8 ? [{
+        type: 'more', icon: 'bi-arrow-right-circle',
+        label: 'Show all ' + result.total + ' clients',
+        sub: result.label ? ('Filter: ' + result.label) : ('matching "' + q + '"'),
+        href: '/clients?q=' + encodeURIComponent(q),
+      }] : [];
+
+      return clientItems.concat(overflow).concat(pageMatches);
+    }
+
+    function render(q) {
+      var items = getItems(q);
+      var qTrim = (q || '').trim();
+
+      if (!items.length && qTrim) {
+        results.innerHTML = '<div class="cmd-empty">No results for "' + qTrim + '"</div>';
+        activeIdx = -1;
+        return;
+      }
+
+      var html = '', lastGroup = null;
+      var result = qTrim ? filterClients(qTrim) : null;
+
+      items.forEach(function(item, i) {
+        var group = item.type === 'recent' ? 'recent' : (item.type === 'client' || item.type === 'more') ? 'client' : 'page';
+        if (group !== lastGroup) {
+          if (group === 'recent') {
+            html += '<div class="cmd-group-label"><i class="bi bi-clock-history" style="margin-right:4px;opacity:0.6;"></i>Recently Visited</div>';
+          } else if (group === 'client') {
+            var lbl = result && result.label
+              ? result.total + ' client' + (result.total !== 1 ? 's' : '') + ' · ' + result.label
+              : 'Clients';
+            html += '<div class="cmd-group-label">' + lbl + '</div>';
+          } else if (!qTrim) {
+            html += '<div class="cmd-group-label">Pages</div>';
+          }
+          lastGroup = group;
+        }
+        html += '<a class="cmd-item' + (item.type === 'more' ? ' cmd-item-more' : '') +
+          '" href="' + item.href + '" data-idx="' + i + '">' +
+          '<span class="cmd-item-icon"><i class="bi ' + item.icon + '"></i></span>' +
+          '<span class="cmd-item-body"><span class="cmd-item-label">' + item.label + '</span>' +
+          '<span class="cmd-item-sub">' + item.sub + '</span></span></a>';
+      });
+      results.innerHTML = html;
+      activeIdx = -1;
+    }
+
+    function setActive(n) {
+      var els = results.querySelectorAll('.cmd-item');
+      if (!els.length) return;
+      activeIdx = Math.max(0, Math.min(n, els.length - 1));
+      els.forEach(function(el, i) { el.classList.toggle('cmd-active', i === activeIdx); });
+      els[activeIdx].scrollIntoView({ block:'nearest' });
+    }
+
+    function loadRichData() {
+      if (_clientsFull) return;
+      fetch('/api/clients-search.json', { credentials: 'same-origin' })
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(data) {
+          if (data) {
+            window._cmdClients = data;
+            _clientsFull = true;
+            render(input.value);
+          }
+        })
+        .catch(function() {});
+    }
+
+    function open() {
+      overlay.style.display = 'flex';
+      render('');
+      requestAnimationFrame(function() { input.focus(); input.select(); });
+      document.body.style.overflow = 'hidden';
+      loadRichData();
+    }
+    function close() {
+      overlay.style.display = 'none';
+      input.value = '';
+      document.body.style.overflow = '';
+    }
+
+    overlay.addEventListener('mousedown', function(e) { if (e.target === overlay) close(); });
+    input.addEventListener('input', function() { render(this.value); activeIdx = -1; });
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'ArrowDown')  { e.preventDefault(); setActive(activeIdx + 1); }
+      else if (e.key === 'ArrowUp')   { e.preventDefault(); setActive(Math.max(-1, activeIdx - 1)); }
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        var els = results.querySelectorAll('.cmd-item');
+        if (activeIdx >= 0 && els[activeIdx]) els[activeIdx].click();
+        else if (input.value.trim()) window.location.href = '/clients?q=' + encodeURIComponent(input.value.trim());
+      }
+      else if (e.key === 'Escape') close();
+    });
+
+    document.addEventListener('keydown', function(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        overlay.style.display === 'none' ? open() : close();
+        return;
+      }
+      if (e.key === '/' && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
+        var si = document.getElementById('smartSearchInput');
+        if (si) { e.preventDefault(); si.focus(); }
+        else { e.preventDefault(); open(); }
+      }
+    });
+
+    window._openCommandPalette = open;
+  })();
+  </script>
+</body>
+</html>

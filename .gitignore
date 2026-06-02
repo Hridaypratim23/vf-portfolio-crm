@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.astro/
+.wrangler/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+.env.*

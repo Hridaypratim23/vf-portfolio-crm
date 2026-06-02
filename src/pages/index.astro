@@ -1,0 +1,1573 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+import {
+  parseDate, fyOfDate, currentFY, fyLabel, isSubscription, isOnetime,
+  isMultiyear, prorateCvForFy, buildFyBreakdown, getLiveFxRates
+} from '../lib/revenue';
+
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+function parseActiveMonths(s: string): number[] {
+  if (!s) return [];
+  const parts = s.replace(/\//g, ',').split(',').map(p => p.trim()).filter(Boolean);
+  const MM: Record<string, number> = {
+    january:1,jan:1,february:2,feb:2,march:3,mar:3,april:4,apr:4,may:5,
+    june:6,jun:6,july:7,jul:7,august:8,aug:8,september:9,sep:9,sept:9,
+    october:10,oct:10,november:11,nov:11,december:12,dec:12
+  };
+  return parts.map(p => MM[p.toLowerCase()]).filter(Boolean);
+}
+
+function nextActiveMonthDate(s: string, today: Date): Date | null {
+  const months = parseActiveMonths(s);
+  if (!months.length) return null;
+  let soonest: Date | null = null;
+  for (const mo of months) {
+    let candidate = new Date(today.getFullYear(), mo - 1, 1);
+    const diffDays = (today.getTime() - candidate.getTime()) / 86400000;
+    if (diffDays > 20) candidate = new Date(today.getFullYear() + 1, mo - 1, 1);
+    if (!soonest || candidate < soonest) soonest = candidate;
+  }
+  return soonest;
+}
+
+function nextRerunDate(start: Date, today: Date): Date {
+  let candidate = new Date(today.getFullYear(), start.getMonth(), start.getDate());
+  const diffDays = (today.getTime() - candidate.getTime()) / 86400000;
+  if (diffDays > 20) candidate = new Date(today.getFullYear() + 1, start.getMonth(), start.getDate());
+  return candidate;
+}
+
+function generateInsights(clients: any[], today: Date) {
+  const insights: any[] = [];
+
+  const subsDue: any[] = [];
+  for (const c of clients) {
+    if (isSubscription(c.type || '')) {
+      const end = parseDate(c.agreement_end_date);
+      if (end) {
+        const d = (end.getTime() - today.getTime()) / 86400000;
+        if (d >= 0 && d <= 30) subsDue.push({ name: c.company_name, id: c.id, days: d });
+      }
+    }
+  }
+  if (subsDue.length) {
+    subsDue.sort((a, b) => a.days - b.days);
+    const priority = subsDue.some(x => x.days <= 7) ? 'urgent' : 'warn';
+    let names = subsDue.slice(0, 2).map(x => x.name).join(', ');
+    if (subsDue.length > 2) names += ` +${subsDue.length - 2} more`;
+    insights.push({
+      icon: 'bi-arrow-repeat', priority,
+      title: `${subsDue.length} subscription${subsDue.length > 1 ? 's' : ''} renewing within 30 days`,
+      body: `Send renewal notices to ${names}.`,
+      link: '/renewals?days=30', link_text: 'Open Renewals',
+    });
+  }
+
+  const overdue: any[] = [];
+  for (const c of clients) {
+    if (isSubscription(c.type || '')) {
+      const end = parseDate(c.agreement_end_date);
+      if (end && (end.getTime() - today.getTime()) / 86400000 < -1) overdue.push({ name: c.company_name, id: c.id });
+    }
+  }
+  if (overdue.length) {
+    let names = overdue.slice(0, 2).map(x => x.name).join(', ');
+    if (overdue.length > 2) names += ` +${overdue.length - 2} more`;
+    insights.push({
+      icon: 'bi-exclamation-triangle-fill', priority: 'urgent',
+      title: `${overdue.length} subscription${overdue.length > 1 ? 's' : ''} past expiry — act now`,
+      body: `Agreements have lapsed: ${names}. Prioritise recovery.`,
+      link: '/renewals', link_text: 'View Overdue',
+    });
+  }
+
+  const live: any[] = [];
+  for (const c of clients) {
+    if (isOnetime(c.type || '')) {
+      const am = c.active_month || null;
+      let rerun: Date | null = null;
+      if (am) rerun = nextActiveMonthDate(am, today);
+      else { const start = parseDate(c.agreement_start_date); if (start) rerun = nextRerunDate(start, today); }
+      if (rerun) {
+        const d = (rerun.getTime() - today.getTime()) / 86400000;
+        if (d >= -10 && d <= 5) live.push({ name: c.company_name, id: c.id });
+      }
+    }
+  }
+  if (live.length) {
+    let names = live.slice(0, 2).map(x => x.name).join(', ');
+    if (live.length > 2) names += ` +${live.length - 2} more`;
+    insights.push({
+      icon: 'bi-lightning-charge-fill', priority: 'warn',
+      title: `${live.length} client${live.length > 1 ? 's' : ''} in active campaign window`,
+      body: `Campaign window is open for ${names}. Send proposals today.`,
+      link: '/renewals#rerun', link_text: 'View Pipeline',
+    });
+  }
+
+  const upcoming: any[] = [];
+  for (const c of clients) {
+    if (isOnetime(c.type || '')) {
+      const am = c.active_month || null;
+      let rerun: Date | null = null;
+      if (am) rerun = nextActiveMonthDate(am, today);
+      else { const start = parseDate(c.agreement_start_date); if (start) rerun = nextRerunDate(start, today); }
+      if (rerun) {
+        const d = (rerun.getTime() - today.getTime()) / 86400000;
+        if (d >= 6 && d <= 30) upcoming.push({ name: c.company_name, id: c.id, days: d });
+      }
+    }
+  }
+  if (upcoming.length) {
+    upcoming.sort((a, b) => a.days - b.days);
+    let names = upcoming.slice(0, 2).map(x => x.name).join(', ');
+    if (upcoming.length > 2) names += ` +${upcoming.length - 2} more`;
+    insights.push({
+      icon: 'bi-calendar2-event-fill', priority: 'info',
+      title: `${upcoming.length} re-run opportunit${upcoming.length > 1 ? 'ies' : 'y'} opening soon`,
+      body: `Prepare outreach for ${names} — campaigns start in under 30 days.`,
+      link: '/renewals#rerun', link_text: 'View Pipeline',
+    });
+  }
+
+  const winback: any[] = [];
+  for (const c of clients) {
+    const status = c.status || '';
+    if (status.includes('Inactive') && status.includes('Repeat')) {
+      let emp = 0;
+      try { emp = parseInt((c.employee_base || '0').split('/')[0].split('-')[0].replace(/[^0-9]/g, '')); } catch {}
+      if (emp >= 300) winback.push({ name: c.company_name, id: c.id, emp });
+    }
+  }
+  if (winback.length) {
+    winback.sort((a, b) => b.emp - a.emp);
+    let names = winback.slice(0, 2).map(x => x.name).join(', ');
+    if (winback.length > 2) names += ` +${winback.length - 2} more`;
+    insights.push({
+      icon: 'bi-arrow-up-circle-fill', priority: 'info',
+      title: `${winback.length} high-value repeat client${winback.length > 1 ? 's' : ''} to re-engage`,
+      body: `${names} have large teams and prior campaigns — strong win-back candidates.`,
+      link: '/clients', link_text: 'View Clients',
+    });
+  }
+
+  return insights.slice(0, 5);
+}
+
+// ── Data fetching — FX fetch + all DB queries in one batch round-trip ─────────
+const db = (Astro.locals as any).runtime.env.DB;
+const [fxRates, batchResults] = await Promise.all([
+  getLiveFxRates(),
+  db.batch([
+    db.prepare('SELECT * FROM clients ORDER BY company_name'),
+    db.prepare('SELECT * FROM extra_revenue'),
+    db.prepare('SELECT * FROM sub_history'),
+  ]),
+]) as [Record<string, number>, any[]];
+const _rawClients      = batchResults[0].results as any[];
+const _rawExtraRevRows = batchResults[1].results as any[];
+const _rawSubHistRows  = batchResults[2].results as any[];
+
+function toUSD(amount: number, currency: string): number {
+  const rate = fxRates[(currency || 'USD').toUpperCase()] ?? 1;
+  return amount / rate;
+}
+
+// India & RoW only — exclude NA (North America / Annual-type legacy) clients everywhere
+const clients = _rawClients.filter((c: any) => c.region ? c.region !== 'North America' : (c.type || '') !== 'Annual');
+const _indiaIds = new Set(clients.map((c: any) => c.id));
+const extraRevRows = _rawExtraRevRows.filter((r: any) => _indiaIds.has(r.client_id));
+const subHistRows  = _rawSubHistRows.filter((r: any)  => _indiaIds.has(r.client_id));
+
+const clientSearchList = JSON.stringify(clients.map((c: any) => ({ id: c.id, name: c.company_name || '', status: c.status || '' })));
+
+const today = new Date();
+const todayFyStart = currentFY();
+
+const total = clients.length;
+const active = clients.filter(c => (c.status || '').includes('Active')).length;
+
+let subRenewing30 = 0, overdueCount = 0, rerunOpps = 0;
+for (const c of clients) {
+  const ctype = c.type || '';
+  if (isSubscription(ctype)) {
+    const end = parseDate(c.agreement_end_date);
+    if (end) {
+      const d = (end.getTime() - today.getTime()) / 86400000;
+      if (d < -1) overdueCount++;
+      else if (d <= 30) subRenewing30++;
+    }
+  } else if (isOnetime(ctype)) {
+    const am = c.active_month || null;
+    let rerun: Date | null = null;
+    if (am) rerun = nextActiveMonthDate(am, today);
+    else { const start = parseDate(c.agreement_start_date); if (start) rerun = nextRerunDate(start, today); }
+    if (rerun) {
+      const d = (rerun.getTime() - today.getTime()) / 86400000;
+      if (d >= -20 && d <= 90) rerunOpps++;
+    }
+  }
+}
+
+// Extra revenue — converted to USD
+let extraLicTotalUSD = 0, extraRpTotalUSD = 0;
+for (const row of (extraRevRows as any[])) {
+  const amtUSD = toUSD(row.amount || 0, row.currency || 'USD');
+  if (row.type === 'Additional Licenses') extraLicTotalUSD += amtUSD;
+  else extraRpTotalUSD += amtUSD;
+}
+
+// Build sub_history lookup first so revClients can reference it
+const subHistByClientId: Record<number, any[]> = {};
+for (const r of subHistRows as any[]) {
+  if (!subHistByClientId[r.client_id]) subHistByClientId[r.client_id] = [];
+  subHistByClientId[r.client_id].push(r);
+}
+
+// Subscription + one-time contract values
+const revClients = clients.filter(c =>
+  (c.contract_value || 0) > 0 ||
+  (c.manual_contract_value || 0) > 0 ||
+  (subHistByClientId[c.id]?.length > 0)
+);
+let arr = clients
+  .filter(c => isSubscription(c.type||'') || (c.type||'') === 'Annual')
+  .reduce((s, c) => s + toUSD(c.contract_value || 0, c.currency || 'USD'), 0);
+arr += extraLicTotalUSD;
+const ot = clients
+  .filter(c => isOnetime(c.type||''))
+  .reduce((s, c) => s + toUSD(c.contract_value || 0, c.currency || 'USD'), 0);
+const extraRpTotal = extraRpTotalUSD;
+const extraLicTotal = extraLicTotalUSD;
+const totalCv = arr + ot + extraRpTotal;
+
+const revByStatus: Record<string, number> = {};
+for (const c of clients) {
+  if ((c.contract_value || 0) > 0) {
+    const s = c.status || 'Unknown';
+    revByStatus[s] = (revByStatus[s] || 0) + (c.contract_value || 0);
+  }
+}
+
+// Per-FY revenue: New Clients (Sales) vs Returning Clients (CX)
+// - New (Sales):      first year of a subscription OR any new one-time campaign
+// - Returning (CX):   subscription renewals (year 2+), One-time Repeat campaigns, Reward Points
+
+// Pre-compute the earliest FY each subscription client first appeared in sub_history
+const firstSubFyById: Record<number, number> = {};
+for (const [cid, hist] of Object.entries(subHistByClientId)) {
+  const years = (hist as any[]).map((r: any) => r.financial_year as number);
+  if (years.length) firstSubFyById[Number(cid)] = Math.min(...years);
+}
+
+// Build client-id → classification lookup for extra-revenue rows
+const clientById: Record<number, any> = {};
+for (const c of clients) clientById[c.id] = c;
+
+const fyTypeMap: Record<string, { new: number; returning: number }> = {};
+
+for (let fyStart = 2024; fyStart <= todayFyStart; fyStart++) {
+  let newRev = 0, returnRev = 0;
+
+  for (const c of clients) {
+    const cv = c.contract_value || 0;
+    const cur = c.currency || 'USD';
+    const ctype = c.type || '';
+    const subHist = (subHistByClientId[c.id] || []) as any[];
+    const isSub = isSubscription(ctype) || ctype === 'Annual';
+    const isRepeat = ctype.toLowerCase().includes('repeat');
+    const isOt = isOnetime(ctype);
+    let share = 0;
+
+    if (subHist.length > 0) {
+      for (const entry of subHist) {
+        if (entry.financial_year === fyStart) share += toUSD(entry.amount, entry.currency);
+      }
+    } else if (cv > 0) {
+      const fyOverride = c.contract_fy_override || null;
+      if (fyOverride) {
+        if (fyOverride === fyStart) share = toUSD(cv, cur);
+      } else if (isSub) {
+        if (isMultiyear(c.agreement_start_date, c.agreement_end_date)) {
+          share = toUSD(prorateCvForFy(c.agreement_start_date, c.agreement_end_date, cv, fyStart), cur);
+        } else {
+          if (fyOfDate(c.agreement_start_date) === fyStart) share = toUSD(cv, cur);
+        }
+      } else if (isOt) {
+        const startFy = fyOfDate(c.agreement_start_date) ?? fyOfDate(c.campaign_start_date);
+        if (startFy === fyStart) share = toUSD(cv, cur);
+      }
+    }
+
+    if (share <= 0) continue;
+
+    if (isRepeat) {
+      returnRev += share;                             // Repeat = CX = Returning
+    } else if (isSub) {
+      const firstFy = firstSubFyById[c.id] ?? (fyOfDate(c.agreement_start_date) ?? fyStart);
+      if (fyStart <= firstFy) newRev += share;        // First year = Sales = New
+      else returnRev += share;                        // Renewal = CX = Returning
+    } else {
+      newRev += share;                                // New one-time = Sales = New
+    }
+  }
+
+  for (const row of extraRevRows as any[]) {
+    let rowFy: number;
+    if (row.financial_year) {
+      rowFy = row.financial_year;
+    } else {
+      try {
+        const d = new Date((row.created_at as string).slice(0, 10));
+        rowFy = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
+      } catch { continue; }
+    }
+    if (rowFy !== fyStart) continue;
+    const amtUSD = toUSD(row.amount || 0, row.currency || 'USD');
+    if (row.type === 'Additional Licenses') {
+      const cl = clientById[row.client_id];
+      if (cl) {
+        const ct = cl.type || '';
+        const clRepeat = ct.toLowerCase().includes('repeat');
+        const clSub = isSubscription(ct) || ct === 'Annual';
+        if (clRepeat) returnRev += amtUSD;
+        else if (clSub) {
+          const ff = firstSubFyById[cl.id] ?? (fyOfDate(cl.agreement_start_date) ?? fyStart);
+          if (fyStart <= ff) newRev += amtUSD; else returnRev += amtUSD;
+        } else newRev += amtUSD;
+      } else newRev += amtUSD;
+    } else {
+      // Reward Points excluded from New vs Returning chart — skip
+    }
+  }
+
+  fyTypeMap[fyLabel(fyStart)] = { new: Math.round(newRev), returning: Math.round(returnRev) };
+}
+
+// Lifetime
+fyTypeMap['Lifetime'] = {
+  new:       Object.values(fyTypeMap).reduce((s, v) => s + v.new, 0),
+  returning: Object.values(fyTypeMap).reduce((s, v) => s + v.returning, 0),
+};
+
+const revByType = fyTypeMap['Lifetime'];
+
+// Top clients chart uses contract-value-for-display logic (latest FY sub_history or raw CV)
+function displayCvInfo(c: any): { usd: number; fy: number | null } {
+  const hist = subHistByClientId[c.id] || [];
+  if (hist.length > 0) {
+    const maxFy = Math.max(...hist.map((r: any) => r.financial_year));
+    const usd = hist
+      .filter((r: any) => r.financial_year === maxFy)
+      .reduce((s: number, r: any) => s + toUSD(r.amount || 0, r.currency || 'USD'), 0);
+    return { usd, fy: maxFy };
+  }
+  const fallbackFy = c.contract_fy_override
+    ?? fyOfDate(c.agreement_start_date)
+    ?? fyOfDate(c.campaign_start_date)
+    ?? null;
+  return { usd: toUSD(c.contract_value || 0, c.currency || 'USD'), fy: fallbackFy };
+}
+const allDisplayClients = clients.filter(c => displayCvInfo(c).usd > 0);
+const topRevClients = [...allDisplayClients].sort((a, b) => displayCvInfo(b).usd - displayCvInfo(a).usd).slice(0, 8);
+const topActiveRevClients = [...allDisplayClients]
+  .filter(c => (c.status || '').includes('Active'))
+  .sort((a, b) => displayCvInfo(b).usd - displayCvInfo(a).usd)
+  .slice(0, 8);
+
+const fyBreakdown = buildFyBreakdown(clients, extraRevRows, subHistRows, todayFyStart, toUSD);
+
+const fyBreakdownForTemplate = fyBreakdown.map(f => ({
+  label: f.label,
+  sub: f.sub,
+  ot: f.ot,
+  extra_rp: f.extraRp,
+  total: f.total,
+  client_count: f.clientCount,
+  is_current: f.isCurrent,
+}));
+
+const currentFyEntry = fyBreakdown.find(f => f.isCurrent);
+const totalRevenue = currentFyEntry?.total || 0;
+const currentFyLabel = currentFyEntry?.label || '';
+const currentFyRange = `Apr ${todayFyStart} – Mar ${todayFyStart + 1}`;
+
+const pipelineLabels: string[] = [];
+const renewalVals: number[] = [];
+const rerunVals: number[] = [];
+for (let i = 0; i < 6; i++) {
+  let yr = today.getFullYear(), mo = today.getMonth() + 1 + i;
+  if (mo > 12) { mo -= 12; yr++; }
+  pipelineLabels.push(new Date(yr, mo - 1, 1).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }));
+  renewalVals.push(0);
+  rerunVals.push(0);
+}
+for (const c of clients) {
+  const ctype = c.type || '';
+  if (isSubscription(ctype)) {
+    const end = parseDate(c.agreement_end_date);
+    if (end) {
+      const d = (end.getTime() - today.getTime()) / 86400000;
+      if (d >= 0 && d <= 185) {
+        const mk = end.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+        const idx = pipelineLabels.indexOf(mk);
+        if (idx !== -1) renewalVals[idx]++;
+      }
+    }
+  } else if (isOnetime(ctype)) {
+    const am = c.active_month || null;
+    let rerun: Date | null = null;
+    if (am) rerun = nextActiveMonthDate(am, today);
+    else { const start = parseDate(c.agreement_start_date); if (start) rerun = nextRerunDate(start, today); }
+    if (rerun) {
+      const d = (rerun.getTime() - today.getTime()) / 86400000;
+      if (d >= 0 && d <= 185) {
+        const mk = rerun.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+        const idx = pipelineLabels.indexOf(mk);
+        if (idx !== -1) rerunVals[idx]++;
+      }
+    }
+  }
+}
+
+const typeCounts: Record<string, number> = {};
+const statusCounts: Record<string, number> = {};
+for (const c of clients) {
+  const t = c.type || 'Unknown';
+  const s = c.status || 'Unknown';
+  typeCounts[t] = (typeCounts[t] || 0) + 1;
+  // Combine "Active (Repeat client)" into "Active" so chart matches stat bar total
+  const sKey = s === 'Active (Repeat client)' ? 'Active' : s;
+  statusCounts[sKey] = (statusCounts[sKey] || 0) + 1;
+}
+
+const chartTypes: Record<string, number> = {};
+for (const [t, n] of Object.entries(typeCounts)) {
+  const tl = t.toLowerCase().trim();
+  let key: string;
+  if (t.includes('Subscription') || t === 'Annual' || t === 'Annual (Partnership)') key = 'Annual';
+  else if (tl === 'one time (repeat)') key = 'One time (Repeat)';
+  else key = 'One time';
+  chartTypes[key] = (chartTypes[key] || 0) + (n as number);
+}
+
+const chartData = {
+  types: typeCounts,
+  chart_types: chartTypes,
+  statuses: statusCounts,
+  pipeline_labels: pipelineLabels,
+  renewal_vals: renewalVals,
+  rerun_vals: rerunVals,
+};
+
+const lifetimeSub   = fyBreakdown.reduce((s, f) => s + f.sub,    0);
+const lifetimeOt    = fyBreakdown.reduce((s, f) => s + f.ot,     0);
+const lifetimeRp    = fyBreakdown.reduce((s, f) => s + f.extraRp, 0);
+const lifetimeTotal = lifetimeSub + lifetimeOt;
+
+const revenueData = {
+  arr: Math.round(lifetimeSub), ot: Math.round(lifetimeOt), rp: Math.round(lifetimeRp), total: Math.round(lifetimeTotal),
+  extra_rp: Math.round(lifetimeRp),
+  count: revClients.length,
+  by_type: revByType,
+  by_type_per_fy: fyTypeMap,
+  fy_type_labels: [...Object.keys(fyTypeMap).filter(k => k !== 'Lifetime').reverse(), 'Lifetime'],
+  by_status: revByStatus,
+  top_clients: topRevClients.map(c => {
+    const info = displayCvInfo(c);
+    return { name: c.company_name, value: Math.round(info.usd), fy: info.fy, currency: 'USD', status: c.status || '', id: c.id };
+  }),
+  top_active_clients: topActiveRevClients.map(c => {
+    const info = displayCvInfo(c);
+    return { name: c.company_name, value: Math.round(info.usd), fy: info.fy, currency: 'USD', status: c.status || '', id: c.id };
+  }),
+  fy_breakdown: fyBreakdownForTemplate,
+};
+
+const insights = generateInsights(clients, today);
+
+// Revenue trend: current FY vs previous FY
+const prevFyEntry = fyBreakdown.find(f => f.fyStart === todayFyStart - 1);
+const prevFyContractTotal = prevFyEntry ? (prevFyEntry.sub + prevFyEntry.ot) : 0;
+const curFyContractTotal  = currentFyEntry ? (currentFyEntry.sub + currentFyEntry.ot) : 0;
+const revDeltaPct = prevFyContractTotal > 0
+  ? Math.round(((curFyContractTotal - prevFyContractTotal) / prevFyContractTotal) * 100)
+  : null;
+
+// Active client trend: clients with revenue in current FY vs previous FY
+const prevFyClientCount = prevFyEntry?.clientCount || 0;
+const curFyClientCount  = currentFyEntry?.clientCount || 0;
+
+const stats = {
+  total,
+  active,
+  sub_renewing_30: subRenewing30,
+  overdue: overdueCount,
+  rerun_opps: rerunOpps,
+  total_revenue: totalRevenue,
+  current_fy_label: currentFyLabel,
+  current_fy_range: currentFyRange,
+  rev_delta_pct: revDeltaPct,
+  prev_fy_label: prevFyEntry?.label || '',
+  cur_fy_client_count: curFyClientCount,
+  prev_fy_client_count: prevFyClientCount,
+};
+
+const todayStr = today.toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+const topClientsHeight = Math.max(
+  revenueData.top_active_clients.length * 38 + 20,
+  revenueData.top_clients.length * 38 + 20,
+  160
+);
+
+function fmtMoney(n: number) { return new Intl.NumberFormat('en-US').format(Math.round(n)); }
+function fmtCompact(n: number): string {
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000)     return `$${Math.round(n / 1_000)}K`;
+  return `$${Math.round(n)}`;
+}
+---
+
+<BaseLayout title="Vantage Fit CRM">
+
+<!-- ── Dashboard Top Bar ──────────────────────────────────── -->
+<div class="dash-topbar">
+    <div class="topbar-search" style="position:relative;">
+        <i class="bi bi-search"></i>
+        <form method="get" action="/clients" autocomplete="off" id="smartSearchForm" style="margin:0;">
+            <input type="text" name="q" id="smartSearchInput" class="vfit-smart-search"
+                   placeholder="Search clients, status, type…"
+                   style="padding-left:34px;width:100%;" />
+        </form>
+        <div id="searchSuggestions" class="search-suggestions" style="display:none;"></div>
+    </div>
+    <div class="topbar-actions">
+        <button class="cmd-trigger-hint" onclick="window._openCommandPalette && window._openCommandPalette()" title="Open command palette">
+            <i class="bi bi-command"></i> <kbd>⌘K</kbd>
+        </button>
+        <div class="topbar-divider"></div>
+        <a href="/renewals" class="btn-vfit-ghost" style="font-size:0.78rem;padding:5px 14px;">
+            <i class="bi bi-calendar-check me-1"></i>Renewals
+        </a>
+        <a href="/fy-revenue" class="btn-fy-nav">
+            <i class="bi bi-bar-chart-fill"></i>
+            <span>FY Revenue</span>
+            {curFyContractTotal > 0 && <span class="btn-fy-badge">{fmtCompact(curFyContractTotal)}</span>}
+        </a>
+        <div class="topbar-divider"></div>
+        <div class="topbar-context">
+            <span class="topbar-date" id="ist-date">{todayStr}</span>
+            <div class="topbar-mini-stats">
+                <a href="/clients" style="color:#4b5563;">{stats.total} clients</a>
+                <span style="color:#d1d5db;">·</span>
+                <a href="/clients?filter=active" style="color:#0ba882;">{stats.active} active</a>
+                {stats.overdue > 0 && (
+                <>
+                <span style="color:#d1d5db;">·</span>
+                <a href="/renewals" style="color:var(--fit-red);">{stats.overdue} overdue</a>
+                </>
+                )}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div style="display:none;">
+<script is:inline>
+  // ── IST clock (date + time) ────────────────────────────────────────
+  (function() {
+    const el = document.getElementById('ist-date');
+    if (!el) return;
+    function update() {
+      const now = new Date();
+      const date = now.toLocaleDateString('en-GB', { weekday:'short', day:'2-digit', month:'short', year:'numeric', timeZone:'Asia/Kolkata' });
+      const time = now.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', timeZone:'Asia/Kolkata' });
+      el.textContent = date + ' · ' + time + ' IST';
+    }
+    update();
+    setInterval(update, 60000);
+  })();
+
+  // ── Count-up animation ────────────────────────────────────────────
+  (function() {
+    function animateCountUp(el) {
+      const target = parseInt(el.dataset.target || el.textContent.replace(/[^0-9]/g,''), 10);
+      if (!target || isNaN(target)) return;
+      const duration = 700;
+      const start    = performance.now();
+      const isMoney  = el.textContent.includes('$');
+      function fmt(n) {
+        if (isMoney) return '$' + new Intl.NumberFormat('en-US').format(Math.round(n));
+        return String(Math.round(n));
+      }
+      function step(ts) {
+        const progress = Math.min((ts - start) / duration, 1);
+        const ease     = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+        el.textContent = fmt(ease * target);
+        if (progress < 1) requestAnimationFrame(step);
+        else el.textContent = fmt(target);
+      }
+      requestAnimationFrame(step);
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+      const io = new IntersectionObserver(function(entries) {
+        entries.forEach(function(entry) {
+          if (entry.isIntersecting) {
+            animateCountUp(entry.target);
+            io.unobserve(entry.target);
+          }
+        });
+      });
+      document.querySelectorAll('.count-up').forEach(function(el) { io.observe(el); });
+    });
+  })();
+</script>
+
+<script is:inline define:vars={{ clientSearchList }}>
+(function() {
+  const clients = JSON.parse(clientSearchList);
+  // Expose to command palette
+  window._cmdClients = clients;
+  const input   = document.getElementById('smartSearchInput');
+  const box     = document.getElementById('searchSuggestions');
+  if (!input || !box) return;
+
+  let active = -1;
+
+  function show(items) {
+    if (!items.length) { box.style.display = 'none'; return; }
+    box.innerHTML = items.slice(0, 8).map((c, i) =>
+      `<div class="ss-item" data-id="${c.id}" data-idx="${i}">
+        <span class="ss-name">${highlight(c.name, input.value)}</span>
+        <span class="ss-status">${c.status || ''}</span>
+      </div>`
+    ).join('');
+    box.style.display = 'block';
+    active = -1;
+    box.querySelectorAll('.ss-item').forEach(function(el) {
+      el.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        window.location.href = '/client/' + el.dataset.id + '?back=%2F';
+      });
+    });
+  }
+
+  function highlight(name, q) {
+    if (!q) return name;
+    const idx = name.toLowerCase().indexOf(q.toLowerCase());
+    if (idx === -1) return name;
+    return name.slice(0, idx) +
+      '<strong>' + name.slice(idx, idx + q.length) + '</strong>' +
+      name.slice(idx + q.length);
+  }
+
+  input.addEventListener('input', function() {
+    const q = this.value.trim();
+    if (!q) { box.style.display = 'none'; return; }
+    const matches = clients.filter(c => c.name.toLowerCase().includes(q.toLowerCase()));
+    show(matches);
+  });
+
+  input.addEventListener('keydown', function(e) {
+    const items = box.querySelectorAll('.ss-item');
+    if (!items.length) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      active = Math.min(active + 1, items.length - 1);
+      items.forEach((el, i) => el.classList.toggle('ss-active', i === active));
+      items[active].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      active = Math.max(active - 1, -1);
+      items.forEach((el, i) => el.classList.toggle('ss-active', i === active));
+      if (active >= 0) items[active].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter' && active >= 0) {
+      e.preventDefault();
+      window.location.href = '/client/' + items[active].dataset.id + '?back=%2F';
+    } else if (e.key === 'Escape') {
+      box.style.display = 'none';
+    }
+  });
+
+  document.addEventListener('click', function(e) {
+    if (!input.contains(e.target) && !box.contains(e.target))
+      box.style.display = 'none';
+  });
+})();
+</script>
+</div>
+
+<div class="container-fluid px-4">
+
+    <!-- ── Stats strip ──────────────────────────────────────── -->
+    <div class="section-label" style="margin-top:20px;">Overview</div>
+    <div class="row g-3 mb-4" style="align-items:stretch;">
+        <div class="col-6 col-lg d-flex">
+            <a href="/clients" class="text-decoration-none w-100">
+            <div class="stat-card stat-total">
+                <div class="stat-icon"><i class="bi bi-building"></i></div>
+                <div>
+                    <div class="stat-number count-up" data-target={stats.total}>{stats.total}</div>
+                    <div class="stat-label">Total Clients</div>
+                    <div class="stat-sub">India &amp; RoW</div>
+                </div>
+            </div>
+            </a>
+        </div>
+        <div class="col-6 col-lg d-flex">
+            <a href="/clients?filter=active" class="text-decoration-none w-100">
+            <div class="stat-card stat-active">
+                <div class="stat-icon"><i class="bi bi-check-circle-fill"></i></div>
+                <div>
+                    <div class="stat-number count-up" data-target={stats.active}>{stats.active}</div>
+                    <div class="stat-label">Active Clients</div>
+                    <div class="stat-sub">Currently engaged</div>
+                    {stats.cur_fy_client_count > 0 && stats.prev_fy_client_count > 0 && (
+                    <div style="font-size:0.68rem;color:#b0b0bc;margin-top:3px;white-space:nowrap;">
+                        {stats.cur_fy_client_count} revenue clients this FY
+                    </div>
+                    )}
+                </div>
+            </div>
+            </a>
+        </div>
+        <div class="col-6 col-lg d-flex">
+            <a href="/renewals?days=30" class="text-decoration-none w-100">
+            <div class="stat-card stat-warn">
+                <div class="stat-icon"><i class="bi bi-arrow-repeat"></i></div>
+                <div>
+                    <div class="stat-number">{stats.sub_renewing_30}</div>
+                    <div class="stat-label">Renewals Due</div>
+                    <div class="stat-sub">Within 30 days</div>
+                </div>
+            </div>
+            </a>
+        </div>
+        <div class="col-6 col-lg d-flex">
+            <a href="/renewals#rerun" class="text-decoration-none w-100">
+            <div class="stat-card stat-danger">
+                <div class="stat-icon"><i class="bi bi-lightning-charge-fill"></i></div>
+                <div>
+                    <div class="stat-number">{stats.rerun_opps}</div>
+                    <div class="stat-label">Re-run Pipeline</div>
+                    <div class="stat-sub">One-time, next 90 days</div>
+                </div>
+            </div>
+            </a>
+        </div>
+        {stats.total_revenue > 0 && (
+        <div class="col-12 col-sm-6 col-lg d-flex">
+            <a href="/fy-revenue" class="text-decoration-none w-100">
+            <div class="stat-card stat-revenue">
+                <div class="stat-icon"><i class="bi bi-graph-up-arrow"></i></div>
+                <div>
+                    <div class="stat-number count-up" data-target={curFyContractTotal} style="font-size:1.55rem;">${fmtMoney(curFyContractTotal)}</div>
+                    <div class="stat-label">Current FY Revenue</div>
+                    <div class="stat-sub">{stats.current_fy_range}</div>
+                    {stats.rev_delta_pct !== null && (
+                    <div style="font-size:0.68rem;color:#b0b0bc;margin-top:3px;white-space:nowrap;">
+                        <i class={`bi bi-arrow-${stats.rev_delta_pct >= 0 ? 'up' : 'down'}-short`} style={`color:${stats.rev_delta_pct >= 0 ? '#0ba882' : '#c9313e'};`}></i>
+                        {stats.rev_delta_pct >= 0 ? '+' : ''}{Math.abs(stats.rev_delta_pct)}% vs {stats.prev_fy_label}
+                    </div>
+                    )}
+                </div>
+            </div>
+            </a>
+        </div>
+        )}
+    </div>
+
+    <!-- ── Charts row ────────────────────────────────────────── -->
+    <div class="section-label">Analytics</div>
+    <div class="row g-3 mb-4">
+
+        <!-- Status Breakdown -->
+        <div class="col-md-3">
+            <div class="card vfit-card h-100">
+                <div class="card-header d-flex align-items-center gap-2">
+                    <span style="width:26px;height:26px;border-radius:8px;background:rgba(241,81,98,0.10);display:inline-flex;align-items:center;justify-content:center;">
+                        <i class="bi bi-pie-chart-fill" style="color:var(--fit-red);font-size:0.8rem;"></i>
+                    </span>
+                    Client Status
+                    <span style="font-size:0.7rem;font-weight:500;color:#aaa;margin-left:2px;">({stats.total})</span>
+                    <span class="cs-info-btn" onmouseenter="showStatusTip(this)" onmouseleave="hideStatusTip()">i</span>
+                </div>
+                <div class="card-body d-flex flex-column align-items-center justify-content-center py-2">
+                    <div style="height:155px; width:100%; position:relative;">
+                        <canvas id="statusChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Client Type Mix -->
+        <div class="col-md-3">
+            <div class="card vfit-card h-100">
+                <div class="card-header d-flex align-items-center gap-2">
+                    <span style="width:26px;height:26px;border-radius:8px;background:rgba(65,216,180,0.12);display:inline-flex;align-items:center;justify-content:center;">
+                        <i class="bi bi-diagram-3-fill" style="color:#0ba882;font-size:0.8rem;"></i>
+                    </span>
+                    Client Type Mix
+                    <span style="font-size:0.7rem;font-weight:500;color:#aaa;margin-left:2px;">({stats.total})</span>
+                </div>
+                <div class="card-body d-flex flex-column align-items-center justify-content-center py-2">
+                    <div style="height:155px; width:100%; position:relative;">
+                        <canvas id="typeChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Renewals + Re-runs Timeline — wider -->
+        <div class="col-md-6">
+            <div class="card vfit-card h-100">
+                <div class="card-header d-flex align-items-center gap-2">
+                    <span style="width:26px;height:26px;border-radius:8px;background:rgba(255,157,87,0.12);display:inline-flex;align-items:center;justify-content:center;">
+                        <i class="bi bi-bar-chart-fill" style="color:var(--orange);font-size:0.8rem;"></i>
+                    </span>
+                    Renewals &amp; Re-run Pipeline
+                    <span style="font-size:0.7rem;font-weight:500;color:#aaa;margin-left:2px;">(next 6 months)</span>
+                </div>
+                <div class="card-body py-2">
+                    <div style="height:155px; position:relative;">
+                        <canvas id="renewalChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ── Revenue Section ──────────────────────────────────────── -->
+    <div class="section-label">Revenue &amp; Financial Overview</div>
+    <div class="vfit-revenue mb-4">
+
+        <!-- KPI strip -->
+        <div style="padding:14px 18px 0; display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;">
+            <span style="font-size:0.65rem; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:0.09em;">All-time revenue since FY24 &mdash; India &amp; RoW</span>
+            <span style="font-size:1.1rem; font-weight:700; color:var(--midnight); letter-spacing:-0.01em;">${fmtMoney(revenueData.total)}</span>
+        </div>
+        <div class="row g-3 p-3 pb-0">
+            <div class="col-6 col-lg-4">
+                <div class="rev-kpi">
+                    <div class="rev-kpi-icon" style="background:rgba(65,216,180,0.15);color:#41D8B4;">
+                        <i class="bi bi-arrow-repeat"></i>
+                    </div>
+                    <div>
+                        <div class="rev-kpi-val" style="color:#41D8B4;">
+                            {revenueData.arr > 0 ? `$${fmtMoney(revenueData.arr)}` : <span style="color:#d0d0e0;font-size:1rem;">—</span>}
+                        </div>
+                        <div class="rev-kpi-lbl">Annual Client Revenue</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-lg-4">
+                <div class="rev-kpi">
+                    <div class="rev-kpi-icon" style="background:rgba(255,157,87,0.15);color:#FF9D57;">
+                        <i class="bi bi-lightning-charge-fill"></i>
+                    </div>
+                    <div>
+                        <div class="rev-kpi-val" style="color:#FF9D57;">
+                            {revenueData.ot > 0 ? `$${fmtMoney(revenueData.ot)}` : <span style="color:#d0d0e0;font-size:1rem;">—</span>}
+                        </div>
+                        <div class="rev-kpi-lbl">One Time Client Revenue</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-lg-4">
+                <div class="rev-kpi">
+                    <div class="rev-kpi-icon" style="background:rgba(241,81,98,0.15);color:#F15162;">
+                        <i class="bi bi-gift-fill"></i>
+                    </div>
+                    <div>
+                        <div class="rev-kpi-val" style="color:#F15162;">
+                            {revenueData.rp > 0 ? `$${fmtMoney(revenueData.rp)}` : <span style="color:#d0d0e0;font-size:1rem;">—</span>}
+                        </div>
+                        <div class="rev-kpi-lbl">Reward Points Revenue</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {revenueData.count > 0 ? (
+        <>
+        <!-- Charts row -->
+        <div class="row g-3 p-3">
+
+            <!-- Revenue: New vs Returning clients donut -->
+            <div class="col-md-4">
+                <div class="rev-chart-card" style="border-top:3px solid #41D8B4;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px;">
+                        <div class="rev-chart-title" style="margin-bottom:0;">Revenue by Source</div>
+                        <select id="revTypeFySelect" class="rev-fy-select">
+                            {revenueData.fy_type_labels.map((lbl: string) => (
+                            <option value={lbl} selected={lbl === revenueData.fy_breakdown.find((f: any) => f.is_current)?.label}>{lbl}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div style="height:220px;position:relative;">
+                        <canvas id="revTypeChart"></canvas>
+                    </div>
+                    <!-- Legend -->
+                    <div style="display:flex;gap:16px;justify-content:center;margin-top:10px;flex-wrap:wrap;">
+                        <div style="display:flex;align-items:center;gap:6px;font-size:0.72rem;color:#555;">
+                            <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:#0ba882;"></span>
+                            New Clients
+                        </div>
+                        <div style="display:flex;align-items:center;gap:6px;font-size:0.72rem;color:#555;">
+                            <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:#29294C;"></span>
+                            Returning Clients
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- FY stacked bar chart + embedded breakdown -->
+            <div class="col-md-8">
+                <div class="rev-chart-card" style="border-top:3px solid #FF9D57;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                        <div class="rev-chart-title" style="margin-bottom:0;">Revenue by Financial Year</div>
+                        <a href="/fy-revenue" style="font-size:0.67rem;color:#0ba882;font-weight:600;text-decoration:none;display:flex;align-items:center;gap:3px;white-space:nowrap;opacity:0.85;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.85">
+                            {currentFyLabel} detail <i class="bi bi-arrow-right" style="font-size:0.6rem;"></i>
+                        </a>
+                    </div>
+                    <div style="height:175px;position:relative;">
+                        <canvas id="revFYChart"></canvas>
+                    </div>
+                    <!-- Inline breakdown grid (columns = FYs, rows = revenue types) -->
+                    <div class="fybg-wrap">
+                        <div class="fybg-grid" style={`grid-template-columns:82px repeat(${revenueData.fy_breakdown.length},1fr)`}>
+                            <!-- Header: FY labels -->
+                            <div></div>
+                            {revenueData.fy_breakdown.map((fy: any) => (
+                            <div class={`fybg-head${fy.is_current ? ' fybg-current' : ''}`}>
+                                {fy.label}
+                                {fy.is_current && <span class="rev-fy-badge" style="margin-left:4px;">Now</span>}
+                            </div>
+                            ))}
+                            <!-- Annual -->
+                            <div class="fybg-lbl"><span class="fybg-dot" style="background:#41D8B4;"></span>Annual</div>
+                            {revenueData.fy_breakdown.map((fy: any) => (
+                            <div class={`fybg-val${fy.is_current ? ' fybg-current-cell' : ''}`}>
+                                {fy.sub > 0 ? `$${fmtMoney(fy.sub)}` : <span class="fybg-nil">—</span>}
+                            </div>
+                            ))}
+                            <!-- One-time -->
+                            <div class="fybg-lbl"><span class="fybg-dot" style="background:#FF9D57;"></span>One-time</div>
+                            {revenueData.fy_breakdown.map((fy: any) => (
+                            <div class={`fybg-val${fy.is_current ? ' fybg-current-cell' : ''}`}>
+                                {fy.ot > 0 ? `$${fmtMoney(fy.ot)}` : <span class="fybg-nil">—</span>}
+                            </div>
+                            ))}
+                            <!-- Separator -->
+                            <div class="fybg-sep"></div>
+                            <!-- Contract Total (Annual + One-time only) -->
+                            <div class="fybg-lbl fybg-total-lbl">Total</div>
+                            {revenueData.fy_breakdown.map((fy: any) => (
+                            <div class={`fybg-val fybg-total-val${fy.is_current ? ' fybg-total-current' : ''}`}>
+                                ${fmtMoney(fy.sub + fy.ot)}
+                            </div>
+                            ))}
+                            <!-- Clients -->
+                            <div class="fybg-lbl fybg-meta">Clients</div>
+                            {revenueData.fy_breakdown.map((fy: any) => (
+                            <div class={`fybg-val fybg-meta${fy.is_current ? ' fybg-current-meta' : ''}`}>
+                                {fy.client_count > 0 ? fy.client_count : <span class="fybg-nil">—</span>}
+                            </div>
+                            ))}
+                            <!-- Reward Points — supplementary, not in total -->
+                            <div class="fybg-rp-sep"></div>
+                            <div class="fybg-rp-lbl"><span class="fybg-dot" style="background:#c4b0f0;"></span>+ Reward Pts *</div>
+                            {revenueData.fy_breakdown.map((fy: any) => (
+                            <div class={`fybg-rp-val${fy.is_current ? ' fybg-current-rp' : ''}`}>
+                                {fy.extra_rp > 0 ? `$${fmtMoney(fy.extra_rp)}` : <span class="fybg-nil">—</span>}
+                            </div>
+                            ))}
+                        </div>
+                        <div class="fybg-footnote">* Reward Points are an additional revenue stream and not included in the contract total above.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Divider -->
+            <div class="col-12"><div style="border-top:1px solid #ededf5;margin:4px 0 0;"></div></div>
+
+            <!-- Top clients horizontal bar -->
+            <div class="col-12">
+                <div class="rev-chart-card" style="border-top:3px solid #29294C;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+                        <div class="rev-chart-title" style="margin-bottom:0;">Top Clients by Contract Value <span id="revTopChartLbl" style="font-size:0.65rem;font-weight:600;background:rgba(11,168,130,0.12);color:#0ba882;border-radius:10px;padding:2px 8px;letter-spacing:0.03em;margin-left:4px;"></span></div>
+                        <div style="display:flex;gap:0;background:#ededf5;border-radius:6px;padding:2px;">
+                            <button id="topChartActiveBtn" onclick="switchTopChart('active')"
+                                style="font-size:0.68rem;font-weight:600;padding:3px 10px;border:none;border-radius:4px;cursor:pointer;letter-spacing:0.04em;background:#0ba882;color:white;transition:background 0.15s,color 0.15s;">
+                                Active
+                            </button>
+                            <button id="topChartLifetimeBtn" onclick="switchTopChart('lifetime')"
+                                style="font-size:0.68rem;font-weight:600;padding:3px 10px;border:none;border-radius:4px;cursor:pointer;letter-spacing:0.04em;background:transparent;color:#9ca3af;transition:background 0.15s,color 0.15s;">
+                                Lifetime
+                            </button>
+                        </div>
+                    </div>
+                    <div id="revTopChartWrap" style={`height:${Math.max(revenueData.top_active_clients.length * 28 + 20, 160)}px;position:relative;`}>
+                        <canvas id="revTopChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+        </>
+        ) : (
+        <div class="text-center py-5" style="color:#aaa;">
+            <i class="bi bi-bar-chart-line" style="font-size:2.5rem;display:block;margin-bottom:10px;color:#d0d0e0;"></i>
+            <div style="font-size:0.88rem;">No contract values yet.</div>
+            <div style="font-size:0.76rem;margin-top:4px;">Open any client &rarr; Edit &rarr; add Contract Value to start tracking revenue.</div>
+        </div>
+        )}
+
+    </div>
+
+    <!-- ── Priority Actions ──────────────────────────────────────── -->
+    <div id="ai-insights" class="section-label">Priority Actions</div>
+    <div class="vfit-insights mb-4">
+        <div class="insights-header">
+            <div class="d-flex align-items-center gap-2">
+                <span class="insights-pulse"></span>
+                <span style="font-size:0.78rem; font-weight:600; color:var(--midnight); letter-spacing:0.04em;">Needs your attention</span>
+            </div>
+            <span style="font-size:0.71rem; color:#9090a8;">Based on your client data · Updated live</span>
+        </div>
+        <div class="row g-3 p-3">
+            {insights.length > 0 ? insights.map(ins => (
+            <div class="col-md-6 col-lg-4">
+                <div class={`insight-card insight-${ins.priority}`}>
+                    <div class="insight-icon"><i class={`bi ${ins.icon}`}></i></div>
+                    <div class="flex-grow-1">
+                        <div class="insight-title">{ins.title}</div>
+                        <div class="insight-body">{ins.body}</div>
+                        <a href={ins.link} class="insight-link">{ins.link_text} &rarr;</a>
+                    </div>
+                </div>
+            </div>
+            )) : (
+            <div class="col-12 text-center py-4">
+                <i class="bi bi-check-circle" style="font-size:1.6rem; color:#0ba882; display:block; margin-bottom:8px;"></i>
+                <span style="color:#9ca3af; font-size:0.85rem;">No priority actions right now — you're all caught up!</span>
+            </div>
+            )}
+        </div>
+    </div>
+
+</div>
+
+<script is:inline src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script is:inline define:vars={{ chartData, revenueData }}>
+const BRAND = {
+    red: '#F15162', red2: '#F4705A', aqua: '#41D8B4',
+    orange: '#FF9D57', midnight: '#29294C', steel: '#303740', gray: '#adb5bd',
+};
+const FONT = { family: 'Inter', size: 11 };
+Chart.defaults.font = FONT;
+Chart.defaults.color = '#6b7280';
+
+function donutOptions(total, onClickFn) {
+    return {
+        maintainAspectRatio: false,
+        cutout: '68%',
+        onClick: onClickFn,
+        plugins: {
+            legend: { position: 'bottom', labels: { font: { family:'Inter', size:9 }, padding: 7, boxWidth: 8, boxHeight: 8 } },
+            tooltip: {
+                callbacks: {
+                    label: ctx => ` ${ctx.label}: ${ctx.raw} client${ctx.raw !== 1 ? 's' : ''} (${Math.round(ctx.raw / total * 100)}%)`
+                }
+            }
+        }
+    };
+}
+
+{
+    const st = chartData.statuses;
+    const labels = Object.keys(st);
+    const data   = Object.values(st);
+    const total  = data.reduce((a, b) => a + b, 0);
+    const colorMap = {
+        'Active': BRAND.aqua, 'Active (Repeat client)': BRAND.orange,
+        'Inactive': BRAND.red, 'Inactive (Repeat)': BRAND.steel, 'Churn': '#6c757d',
+    };
+    new Chart(document.getElementById('statusChart'), {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data, backgroundColor: labels.map(l => colorMap[l] || BRAND.gray), borderWidth: 2, borderColor: '#fff', hoverOffset: 8 }] },
+        options: donutOptions(total, (e, els) => {
+            if (els.length) window.location.href = '/clients?status=' + encodeURIComponent(labels[els[0].index]);
+        })
+    });
+    document.getElementById('statusChart').style.cursor = 'pointer';
+}
+
+{
+    const ty = chartData.chart_types;
+    const labels = Object.keys(ty);
+    const data   = Object.values(ty);
+    const total  = data.reduce((a, b) => a + b, 0);
+    const palette = [BRAND.midnight, BRAND.orange, BRAND.aqua, BRAND.red, BRAND.gray];
+    const typeFilterMap = { 'Annual': 'annual', 'One time': 'onetime-pure', 'One time (Repeat)': 'onetime-repeat' };
+    new Chart(document.getElementById('typeChart'), {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data, backgroundColor: labels.map((_, i) => palette[i % palette.length]), borderWidth: 2, borderColor: '#fff', hoverOffset: 8 }] },
+        options: donutOptions(total, (e, els) => {
+            if (els.length) {
+                const lbl = labels[els[0].index];
+                const f = typeFilterMap[lbl];
+                window.location.href = f ? '/clients?filter=' + f : '/clients?q=' + encodeURIComponent(lbl);
+            }
+        })
+    });
+    document.getElementById('typeChart').style.cursor = 'pointer';
+}
+
+{
+    const labels    = chartData.pipeline_labels;
+    const subData   = chartData.renewal_vals;
+    const rerunData = chartData.rerun_vals;
+    new Chart(document.getElementById('renewalChart'), {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [
+                { label: 'Subscription Renewals', data: subData,   backgroundColor: 'rgba(241,81,98,0.80)', borderRadius: 5, borderSkipped: false },
+                { label: 'Re-run Opportunities',  data: rerunData, backgroundColor: 'rgba(65,216,180,0.75)', borderRadius: 5, borderSkipped: false },
+            ]
+        },
+        options: {
+            maintainAspectRatio: false,
+            onClick: (e, els) => {
+                if (els.length) {
+                    const dest = els[0].datasetIndex === 0 ? '/renewals' : '/renewals#rerun';
+                    window.location.href = dest;
+                }
+            },
+            plugins: {
+                legend: { position: 'bottom', labels: { font: { family:'Inter', size:9 }, padding: 7, boxWidth: 8, boxHeight: 8 } },
+                tooltip: {
+                    callbacks: {
+                        label: ctx => ` ${ctx.raw} ${ctx.dataset.label.toLowerCase()}`,
+                        title: ctx => ctx[0].label,
+                    }
+                }
+            },
+            scales: {
+                x: { grid: { display: false }, ticks: { font: { family:'Inter', size:9 } } },
+                y: { beginAtZero: true, ticks: { stepSize: 1, font: { family:'Inter', size:9 } }, grid: { color: 'rgba(0,0,0,0.04)' } }
+            }
+        }
+    });
+    document.getElementById('renewalChart').style.cursor = 'pointer';
+}
+
+if (revenueData.count > 0) {
+    const revData = revenueData;
+    const REV_FONT = { family: 'Inter', size: 10 };
+    const REV_DARK = '#6b7280';
+
+    {
+        var byFy   = revData.by_type_per_fy;
+        var fyLbls = revData.fy_type_labels;
+        var currentFyLbl = ((revData.fy_breakdown.find(function(f){return f.is_current;}))||{}).label || fyLbls[0];
+        var COLOR_NEW = '#0ba882';
+        var COLOR_RET = '#29294C';
+
+        function getSlice(fyLbl) {
+            var d = byFy[fyLbl] || { new: 0, returning: 0 };
+            return {
+                vals:   [d['new'] || 0, d['returning'] || 0],
+                labels: ['New Clients', 'Returning Clients'],
+                colors: [COLOR_NEW, COLOR_RET],
+            };
+        }
+
+        var curTotal = 0;
+        var centerPlugin = {
+            id: 'srcCenterText',
+            afterDraw: function(chart) {
+                var ca = chart.chartArea;
+                var cx = (ca.left + ca.right) / 2;
+                var cy = (ca.top + ca.bottom) / 2;
+                var ctx2 = chart.ctx;
+                ctx2.save();
+                ctx2.textAlign = 'center'; ctx2.textBaseline = 'middle';
+                var total = chart.data.datasets[0].data.reduce(function(a,b){return a+b;},0);
+                ctx2.font = 'bold 15px Inter'; ctx2.fillStyle = '#29294C';
+                ctx2.fillText(total >= 1000 ? '$' + (total/1000).toFixed(0) + 'K' : '$' + total.toLocaleString(), cx, cy - 9);
+                ctx2.font = '600 9px Inter'; ctx2.fillStyle = '#9090a8';
+                ctx2.fillText('TOTAL REVENUE', cx, cy + 9);
+                ctx2.restore();
+            }
+        };
+
+        var initSlice = getSlice(currentFyLbl);
+        curTotal = initSlice.vals.reduce(function(a,b){return a+b;},0);
+
+        var revTypeChart = new Chart(document.getElementById('revTypeChart'), {
+            type: 'doughnut',
+            data: {
+                labels: initSlice.labels,
+                datasets: [{
+                    data: initSlice.vals,
+                    backgroundColor: initSlice.colors,
+                    borderWidth: 3,
+                    borderColor: '#fff',
+                    hoverOffset: 8,
+                    hoverBorderWidth: 3,
+                }]
+            },
+            options: {
+                maintainAspectRatio: false,
+                cutout: '72%',
+                layout: { padding: 6 },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                var t = ctx.chart.data.datasets[0].data.reduce(function(a,b){return a+b;},0);
+                                var pct = t > 0 ? Math.round(ctx.raw/t*100) : 0;
+                                return ' $' + ctx.raw.toLocaleString() + '  (' + pct + '%)';
+                            }
+                        }
+                    }
+                }
+            },
+            plugins: [centerPlugin]
+        });
+
+        // Dropdown handler
+        var selectEl = document.getElementById('revTypeFySelect');
+        if (selectEl) {
+            selectEl.value = currentFyLbl;
+            selectEl.addEventListener('change', function() {
+                var slice = getSlice(this.value);
+                revTypeChart.data.datasets[0].data = slice.vals;
+                revTypeChart.update();
+            });
+        }
+    }
+
+    {
+        const fy    = revData.fy_breakdown;
+        const fyLbl = fy.map(r => r.label);
+        const fyHighlightPlugin = {
+            id: 'fyHighlight',
+            beforeDraw(chart) {
+                const { ctx, chartArea: { top, bottom } } = chart;
+                const currentIdx = fy.findIndex(r => r.is_current);
+                if (currentIdx < 0) return;
+                const meta = chart.getDatasetMeta(0);
+                const bar  = meta.data[currentIdx];
+                if (!bar) return;
+                const hw = (bar.width || 40) / 2 + 10;
+                ctx.save();
+                ctx.fillStyle = 'rgba(65,216,180,0.07)';
+                const bx = bar.x - hw;
+                const bw = hw * 2;
+                if (ctx.roundRect) ctx.roundRect(bx, top - 8, bw, bottom - top + 8, [6,6,0,0]);
+                else ctx.rect(bx, top - 8, bw, bottom - top + 8);
+                ctx.fill();
+                ctx.font = '700 8px Inter';
+                ctx.fillStyle = '#0ba882';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.fillText('CURRENT', bar.x, top + 3);
+                ctx.restore();
+            }
+        };
+        const fyTotalPlugin = {
+            id: 'fyTotalLabels',
+            afterDatasetsDraw(chart) {
+                const { ctx, scales: { y } } = chart;
+                fy.forEach(function(row, i) {
+                    const contractTotal = (row.sub || 0) + (row.ot || 0);
+                    if (!contractTotal) return;
+                    const meta = chart.getDatasetMeta(0);
+                    if (!meta.data[i]) return;
+                    const bar = meta.data[i];
+                    // position label above the full stacked bar (incl. RP)
+                    const stackTop = row.total || contractTotal;
+                    const yPos = y.getPixelForValue(stackTop);
+                    ctx.save();
+                    ctx.font = 'bold 9px Inter';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillStyle = '#29294C';
+                    ctx.fillText('$' + Math.round(contractTotal/1000) + 'K', bar.x, yPos - 4);
+                    ctx.restore();
+                });
+            }
+        };
+        new Chart(document.getElementById('revFYChart'), {
+            type: 'bar',
+            data: {
+                labels: fyLbl,
+                datasets: [
+                    { label: 'Annual Client',   data: fy.map(r => r.sub),      backgroundColor: fy.map(r => r.is_current ? 'rgba(65,216,180,1.0)'  : 'rgba(65,216,180,0.60)'),  borderRadius: 4, borderSkipped: false },
+                    { label: 'One Time Client', data: fy.map(r => r.ot),       backgroundColor: fy.map(r => r.is_current ? 'rgba(255,157,87,1.0)'  : 'rgba(255,157,87,0.60)'),  borderRadius: 4, borderSkipped: false },
+                    { label: 'Reward Points',   data: fy.map(r => r.extra_rp), backgroundColor: fy.map(r => r.is_current ? 'rgba(167,125,255,1.0)' : 'rgba(167,125,255,0.60)'), borderRadius: 4, borderSkipped: false },
+                ]
+            },
+            options: {
+                maintainAspectRatio: false,
+                layout: { padding: { top: 24 } },
+                plugins: {
+                    legend: { position:'bottom', labels:{ font:REV_FONT, color:REV_DARK, padding:10, boxWidth:9, boxHeight:9 } },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => ` ${ctx.dataset.label}: $${ctx.raw.toLocaleString()}`,
+                            afterBody: (items) => {
+                                const idx = items[0].dataIndex;
+                                const row = fy[idx];
+                                const contractTotal = (row.sub || 0) + (row.ot || 0);
+                                const lines = [`Contract Total: $${contractTotal.toLocaleString()}  •  ${row.client_count} clients`];
+                                if (row.extra_rp > 0) lines.push(`+ Reward Points: $${row.extra_rp.toLocaleString()} (not in total)`);
+                                return lines;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { stacked:true, grid:{display:false}, ticks:{font:REV_FONT, color:REV_DARK} },
+                    y: { stacked:true, ticks:{font:REV_FONT, color:REV_DARK, callback: v => '$' + Math.round(v/1000) + 'K'}, grid:{color:'rgba(0,0,0,0.06)'} }
+                }
+            },
+            plugins: [fyHighlightPlugin, fyTotalPlugin]
+        });
+    }
+
+    (function() {
+        const fyStr = function(fy) {
+            if (!fy) return null;
+            return 'FY ' + String(fy).slice(2) + '-' + String(fy + 1).slice(2);
+        };
+
+        var topChart = null;
+
+        var STATUS_COLORS = {
+            'Active':                 'rgba(65,216,180,0.85)',
+            'Active (Repeat client)': 'rgba(65,216,180,0.85)',
+            'Inactive':               'rgba(255,157,87,0.80)',
+            'Inactive (Repeat)':      'rgba(255,157,87,0.80)',
+            'Churn':                  'rgba(173,181,189,0.75)',
+        };
+
+        var barLabelPlugin = {
+            id: 'barLabelPlugin',
+            afterDatasetsDraw: function(chart) {
+                var ctx = chart.ctx;
+                chart.data.datasets.forEach(function(dataset, i) {
+                    var meta = chart.getDatasetMeta(i);
+                    meta.data.forEach(function(bar, j) {
+                        var val = dataset.data[j];
+                        if (!val) return;
+                        var txt = '$' + Math.round(val / 1000) + 'K';
+                        ctx.save();
+                        ctx.font = 'bold 9px Inter';
+                        ctx.textBaseline = 'middle';
+                        var txtW = ctx.measureText(txt).width;
+                        var barW = bar.x - bar.base;
+                        if (barW > txtW + 14) {
+                            ctx.fillStyle = 'rgba(255,255,255,0.92)';
+                            ctx.textAlign = 'right';
+                            ctx.fillText(txt, bar.x - 5, bar.y);
+                        } else {
+                            ctx.fillStyle = '#6b7280';
+                            ctx.textAlign = 'left';
+                            ctx.fillText(txt, bar.x + 5, bar.y);
+                        }
+                        ctx.restore();
+                    });
+                });
+            }
+        };
+
+        var drawTopChart = function(data) {
+            var wrap = document.getElementById('revTopChartWrap');
+            wrap.style.height = Math.max(data.length * 28 + 20, 160) + 'px';
+            if (topChart) { topChart.destroy(); topChart = null; }
+            var oldCanvas = document.getElementById('revTopChart');
+            var newCanvas = document.createElement('canvas');
+            newCanvas.id = 'revTopChart';
+            oldCanvas.parentNode.replaceChild(newCanvas, oldCanvas);
+            var names  = data.map(function(c, i) { return '#' + (i+1) + '  ' + c.name; });
+            var vals   = data.map(function(c) { return c.value; });
+            var colors = data.map(function(c) { return STATUS_COLORS[c.status] || 'rgba(65,216,180,0.75)'; });
+            var avg = vals.length ? vals.reduce(function(a,b){return a+b;},0) / vals.length : 0;
+            var avgLinePlugin = {
+                id: 'avgLine',
+                afterDraw: function(chart) {
+                    if (!avg) return;
+                    var ctx = chart.ctx;
+                    var xScale = chart.scales['x'];
+                    var xPos = xScale.getPixelForValue(avg);
+                    var ca = chart.chartArea;
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.setLineDash([4, 4]);
+                    ctx.strokeStyle = 'rgba(100,100,160,0.40)';
+                    ctx.lineWidth = 1.5;
+                    ctx.moveTo(xPos, ca.top);
+                    ctx.lineTo(xPos, ca.bottom);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.font = 'bold 8px Inter';
+                    ctx.fillStyle = '#9090a8';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText('Avg $' + Math.round(avg/1000) + 'K', xPos, ca.top - 2);
+                    ctx.restore();
+                }
+            };
+            topChart = new Chart(newCanvas, {
+                type: 'bar',
+                data: {
+                    labels: names,
+                    datasets: [{ data: vals, backgroundColor: colors, borderRadius: 5, borderSkipped: false, barThickness: 20 }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    maintainAspectRatio: false,
+                    layout: { padding: { right: 50, top: 18 } },
+                    onClick: function(e, els) {
+                        if (els.length) {
+                            var c = data[els[0].index];
+                            if (c.id) window.location.href = '/client/' + c.id + '?back=%2F';
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(ctx) {
+                                    var c = data[ctx.dataIndex];
+                                    return [
+                                        '  Contract Value: $' + Number(ctx.raw).toLocaleString('en-US'),
+                                        '  Status: ' + (c.status || '—'),
+                                        '  Agreement FY: ' + (fyStr(c.fy) || '—'),
+                                    ];
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { grid:{color:'rgba(0,0,0,0.06)'}, ticks:{font:REV_FONT, color:REV_DARK, callback: function(v) { return '$' + Math.round(v/1000) + 'K'; }} },
+                        y: { grid:{display:false}, ticks:{font:REV_FONT, color:REV_DARK, crossAlign:'far'} }
+                    }
+                },
+                plugins: [barLabelPlugin, avgLinePlugin]
+            });
+            newCanvas.style.cursor = 'pointer';
+            var lbl = document.getElementById('revTopChartLbl');
+            if (lbl) lbl.textContent = data.length + ' client' + (data.length !== 1 ? 's' : '');
+        };
+
+        window.switchTopChart = function(mode) {
+            var activeBtn   = document.getElementById('topChartActiveBtn');
+            var lifetimeBtn = document.getElementById('topChartLifetimeBtn');
+            if (mode === 'active') {
+                activeBtn.style.background   = '#0ba882';
+                activeBtn.style.color        = 'white';
+                lifetimeBtn.style.background = 'transparent';
+                lifetimeBtn.style.color      = '#9ca3af';
+                drawTopChart(revData.top_active_clients);
+            } else {
+                lifetimeBtn.style.background = '#0ba882';
+                lifetimeBtn.style.color      = 'white';
+                activeBtn.style.background   = 'transparent';
+                activeBtn.style.color        = '#9ca3af';
+                drawTopChart(revData.top_clients);
+            }
+        };
+
+        drawTopChart(revData.top_active_clients);
+    })();
+}
+</script>
+
+<!-- ── Status tooltip (fixed, JS-positioned) ─────────────── -->
+<div id="statusInfoTip" style="display:none;position:fixed;z-index:99999;width:230px;background:#fff;border:1px solid #e0e0e8;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,0.14);padding:12px 14px;font-size:0.72rem;line-height:1.6;color:#374151;pointer-events:none;">
+    <strong style="display:block;font-size:0.72rem;color:#111;margin-bottom:2px;">Active</strong>
+    Clients currently running challenges on the platform.
+    <strong style="display:block;font-size:0.72rem;color:#111;margin-top:8px;margin-bottom:2px;">Churn</strong>
+    Clients who have disengaged and are no longer participating or responding to programs.
+    <strong style="display:block;font-size:0.72rem;color:#111;margin-top:8px;margin-bottom:2px;">Inactive (Repeat)</strong>
+    Returning clients who have previously run one-time challenges but are not currently active.
+    <strong style="display:block;font-size:0.72rem;color:#111;margin-top:8px;margin-bottom:2px;">Active (Repeat)</strong>
+    Returning clients who are currently running a new challenge on the platform.
+</div>
+
+<script is:inline>
+(function () {
+  var tip = document.getElementById('statusInfoTip');
+  window.showStatusTip = function (btn) {
+    if (!tip) return;
+    var rect = btn.getBoundingClientRect();
+    tip.style.display = 'block';
+    var TW = 230, TH = tip.offsetHeight || 220, PAD = 10;
+    var left = rect.right + 8;
+    var top  = rect.top;
+    // flip left if it would overflow the right edge
+    if (left + TW + PAD > window.innerWidth) left = rect.left - TW - 8;
+    // clamp vertical so it never goes off screen
+    if (top + TH + PAD > window.innerHeight) top = window.innerHeight - TH - PAD;
+    if (top < PAD) top = PAD;
+    tip.style.left = left + 'px';
+    tip.style.top  = top  + 'px';
+  };
+  window.hideStatusTip = function () {
+    if (tip) tip.style.display = 'none';
+  };
+})();
+</script>
+
+<style>
+.cs-info-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: rgba(150,150,170,0.22);
+    color: #888;
+    font-size: 9px;
+    font-style: italic;
+    font-weight: 700;
+    cursor: default;
+    user-select: none;
+    flex-shrink: 0;
+    margin-left: 4px;
+    transition: background 0.15s, color 0.15s;
+}
+.cs-info-btn:hover { background: rgba(100,100,140,0.28); color: #444; }
+.rev-fy-select {
+    font-size: 0.7rem;
+    font-weight: 600;
+    font-family: 'Inter', sans-serif;
+    padding: 4px 26px 4px 9px;
+    border: 1px solid #dde0e8;
+    border-radius: 8px;
+    background: #f8f8fc url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%239090a8'/%3E%3C/svg%3E") no-repeat right 8px center;
+    background-size: 8px;
+    color: var(--midnight);
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.rev-fy-select:hover, .rev-fy-select:focus {
+    border-color: #0ba882;
+    box-shadow: 0 0 0 2px rgba(11,168,130,0.12);
+}
+</style>
+
+</BaseLayout>

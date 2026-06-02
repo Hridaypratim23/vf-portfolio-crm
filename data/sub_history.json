@@ -1,0 +1,290 @@
+[
+  {
+    "id": 1,
+    "client_id": 2,
+    "financial_year": 2024,
+    "amount": 51000,
+    "currency": "USD",
+    "contributor": "CX",
+    "created_at": "2025-06-15T10:00:00Z"
+  },
+  {
+    "id": 2,
+    "client_id": 2,
+    "financial_year": 2025,
+    "amount": 60000,
+    "currency": "USD",
+    "contributor": "CX",
+    "created_at": "2025-02-15T10:00:00Z"
+  },
+  {
+    "id": 3,
+    "client_id": 7,
+    "financial_year": 2024,
+    "amount": 101000,
+    "currency": "USD",
+    "contributor": "CX",
+    "created_at": "2025-03-15T10:00:00Z"
+  },
+  {
+    "id": 4,
+    "client_id": 7,
+    "financial_year": 2025,
+    "amount": 89000,
+    "currency": "USD",
+    "contributor": "CX",
+    "created_at": "2025-07-15T10:00:00Z"
+  },
+  {
+    "id": 5,
+    "client_id": 16,
+    "financial_year": 2024,
+    "amount": 31000,
+    "currency": "USD",
+    "contributor": "CX",
+    "created_at": "2025-03-15T10:00:00Z"
+  },
+  {
+    "id": 6,
+    "client_id": 16,
+    "financial_year": 2025,
+    "amount": 36000,
+    "currency": "USD",
+    "contributor": "Sales",
+    "created_at": "2025-03-15T10:00:00Z"
+  },
+  {
+    "id": 7,
+    "client_id": 27,
+    "financial_year": 2024,
+    "amount": 28000,
+    "currency": "USD",
+    "contributor": "CX",
+    "created_at": "2025-02-15T10:00:00Z"
+  },
+  {
+    "id": 8,
+    "client_id": 27,
+    "financial_year": 2025,
+    "amount": 27000,
+    "currency": "USD",
+    "contributor": "Sales",
+    "created_at": "2025-05-15T10:00:00Z"
+  },
+  {
+    "id": 9,
+    "client_id": 28,
+    "financial_year": 2024,
+    "amount": 6000,
+    "currency": "USD",
+    "contributor": "Sales",
+    "created_at": "2025-09-15T10:00:00Z"
+  },
+  {
+    "id": 10,
+    "client_id": 28,
+    "financial_year": 2025,
+    "amount": 6000,
+    "currency": "USD",
+    "contributor": "Sales",
+    "created_at": "2025-07-15T10:00:00Z"
+  },
+  {
+    "id": 11,
+    "client_id": 29,
+    "financial_year": 2024,
+    "amount": 471000,
+    "currency": "INR",
+    "contributor": "CX",
+    "created_at": "2025-07-15T10:00:00Z"
+  },
+  {
+    "id": 12,
+    "client_id": 29,
+    "financial_year": 2025,
+    "amount": 438000,
+    "currency": "INR",
+    "contributor": "CX",
+    "created_at": "2025-06-15T10:00:00Z"
+  },
+  {
+    "id": 13,
+    "client_id": 31,
+    "financial_year": 2024,
+    "amount": 28948,
+    "currency": "AUD",
+    "contributor": "CX",
+    "created_at": "2025-05-15T10:00:00Z"
+  },
+  {
+    "id": 14,
+    "client_id": 31,
+    "financial_year": 2025,
+    "amount": 26436,
+    "currency": "AUD",
+    "contributor": "Sales",
+    "created_at": "2025-04-15T10:00:00Z"
+  },
+  {
+    "id": 15,
+    "client_id": 33,
+    "financial_year": 2024,
+    "amount": 69243,
+    "currency": "USD",
+    "contributor": "Sales",
+    "created_at": "2025-08-15T10:00:00Z"
+  },
+  {
+    "id": 16,
+    "client_id": 33,
+    "financial_year": 2025,
+    "amount": 66505,
+    "currency": "USD",
+    "contributor": "Sales",
+    "created_at": "2025-05-15T10:00:00Z"
+  },
+  {
+    "id": 17,
+    "client_id": 35,
+    "financial_year": 2024,
+    "amount": 18535,
+    "currency": "EUR",
+    "contributor": "CX",
+    "created_at": "2025-05-15T10:00:00Z"
+  },
+  {
+    "id": 18,
+    "client_id": 35,
+    "financial_year": 2025,
+    "amount": 19583,
+    "currency": "EUR",
+    "contributor": "Sales",
+    "created_at": "2025-02-15T10:00:00Z"
+  },
+  {
+    "id": 19,
+    "client_id": 36,
+    "financial_year": 2024,
+    "amount": 72978,
+    "currency": "USD",
+    "contributor": "CX",
+    "created_at": "2025-05-15T10:00:00Z"
+  },
+  {
+    "id": 20,
+    "client_id": 36,
+    "financial_year": 2025,
+    "amount": 63743,
+    "currency": "USD",
+    "contributor": "CX",
+    "created_at": "2025-05-15T10:00:00Z"
+  },
+  {
+    "id": 21,
+    "client_id": 37,
+    "financial_year": 2024,
+    "amount": 15517,
+    "currency": "CAD",
+    "contributor": "CX",
+    "created_at": "2025-03-15T10:00:00Z"
+  },
+  {
+    "id": 22,
+    "client_id": 37,
+    "financial_year": 2025,
+    "amount": 15258,
+    "currency": "CAD",
+    "contributor": "Sales",
+    "created_at": "2025-05-15T10:00:00Z"
+  },
+  {
+    "id": 23,
+    "client_id": 38,
+    "financial_year": 2024,
+    "amount": 37688,
+    "currency": "CAD",
+    "contributor": "Sales",
+    "created_at": "2025-07-15T10:00:00Z"
+  },
+  {
+    "id": 24,
+    "client_id": 38,
+    "financial_year": 2025,
+    "amount": 43070,
+    "currency": "CAD",
+    "contributor": "CX",
+    "created_at": "2025-01-15T10:00:00Z"
+  },
+  {
+    "id": 25,
+    "client_id": 40,
+    "financial_year": 2024,
+    "amount": 49452,
+    "currency": "GBP",
+    "contributor": "Sales",
+    "created_at": "2025-06-15T10:00:00Z"
+  },
+  {
+    "id": 26,
+    "client_id": 40,
+    "financial_year": 2025,
+    "amount": 52750,
+    "currency": "GBP",
+    "contributor": "CX",
+    "created_at": "2025-05-15T10:00:00Z"
+  },
+  {
+    "id": 27,
+    "client_id": 43,
+    "financial_year": 2024,
+    "amount": 18477,
+    "currency": "GBP",
+    "contributor": "Sales",
+    "created_at": "2025-02-15T10:00:00Z"
+  },
+  {
+    "id": 28,
+    "client_id": 43,
+    "financial_year": 2025,
+    "amount": 18678,
+    "currency": "GBP",
+    "contributor": "Sales",
+    "created_at": "2025-03-15T10:00:00Z"
+  },
+  {
+    "id": 29,
+    "client_id": 45,
+    "financial_year": 2024,
+    "amount": 4841,
+    "currency": "GBP",
+    "contributor": "CX",
+    "created_at": "2025-06-15T10:00:00Z"
+  },
+  {
+    "id": 30,
+    "client_id": 45,
+    "financial_year": 2025,
+    "amount": 5033,
+    "currency": "GBP",
+    "contributor": "CX",
+    "created_at": "2025-08-15T10:00:00Z"
+  },
+  {
+    "id": 31,
+    "client_id": 46,
+    "financial_year": 2024,
+    "amount": 29942,
+    "currency": "AUD",
+    "contributor": "CX",
+    "created_at": "2025-07-15T10:00:00Z"
+  },
+  {
+    "id": 32,
+    "client_id": 46,
+    "financial_year": 2025,
+    "amount": 30356,
+    "currency": "AUD",
+    "contributor": "Sales",
+    "created_at": "2025-08-15T10:00:00Z"
+  }
+]

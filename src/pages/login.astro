@@ -1,0 +1,418 @@
+---
+const env            = (Astro.locals as any).runtime?.env;
+const correctPassword: string | undefined = env?.AUTH_PASSWORD;
+const secret: string | undefined          = env?.AUTH_SECRET;
+const db                                  = env?.DB;
+
+const req     = Astro.request;
+const ip      = req.headers.get('CF-Connecting-IP') || req.headers.get('x-forwarded-for') || '';
+const country = req.headers.get('CF-IPCountry') || '';
+const ua      = req.headers.get('user-agent') || '';
+
+async function auditLog(outcome: 'success' | 'failure') {
+  if (!db) return;
+  try {
+    await db
+      .prepare('INSERT INTO login_audit (timestamp, ip, country, user_agent, outcome) VALUES (?, ?, ?, ?, ?)')
+      .bind(new Date().toISOString(), ip, country, ua.slice(0, 255), outcome)
+      .run();
+  } catch {}
+}
+
+const RATE_LIMIT_MAX      = 5;   // max failed attempts
+const RATE_LIMIT_WINDOW_M = 15;  // rolling window in minutes
+
+async function isRateLimited(): Promise<boolean> {
+  if (!db || !ip) return false;
+  try {
+    const row = await db
+      .prepare(
+        "SELECT COUNT(*) as cnt FROM login_audit WHERE ip = ? AND outcome = 'failure' AND timestamp > datetime('now', ?)"
+      )
+      .bind(ip, `-${RATE_LIMIT_WINDOW_M} minutes`)
+      .first<{ cnt: number }>();
+    return (row?.cnt ?? 0) >= RATE_LIMIT_MAX;
+  } catch {
+    return false;
+  }
+}
+
+let loginError = '';
+//const rateLimited = await isRateLimited();
+const rateLimited = false;
+if (rateLimited) {
+  loginError = `Too many failed attempts. Please wait ${RATE_LIMIT_WINDOW_M} minutes and try again.`;
+} else if (Astro.request.method === 'POST') {
+  const formData = await Astro.request.formData();
+  const password = formData.get('password') as string;
+
+  if (correctPassword && secret && db && password === correctPassword) {
+    const token     = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours
+
+    try {
+      await db
+        .prepare('INSERT INTO sessions (token, expires_at, ip, country, user_agent) VALUES (?, ?, ?, ?, ?)')
+        .bind(token, expiresAt, ip, country, ua.slice(0, 255))
+        .run();
+
+      // Clean up expired sessions and audit logs older than 90 days
+      await db.prepare("DELETE FROM sessions WHERE expires_at < datetime('now')").run();
+      await db.prepare("DELETE FROM login_audit WHERE created_at < datetime('now', '-90 days')").run();
+    } catch {}
+
+    await auditLog('success');
+
+    Astro.cookies.set('auth_session', token, {
+      path:     '/',
+      httpOnly: true,
+      secure:   true,
+      sameSite: 'lax',
+      maxAge:   24 * 60 * 60,
+    });
+
+    return Astro.redirect('/');
+  }
+
+  await auditLog('failure');
+  loginError = 'Incorrect password. Please try again.';
+}
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login – Vantage Fit CRM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      background: #f5f6fa;
+    }
+
+    /* ── Left brand panel ── */
+    .brand-panel {
+      width: 52%;
+      min-height: 100vh;
+      background: #12132a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      padding: 3rem;
+    }
+
+    .brand-panel::before {
+      content: '';
+      position: absolute;
+      width: 520px;
+      height: 520px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(230,57,70,0.18) 0%, transparent 70%);
+      top: -120px;
+      right: -120px;
+      pointer-events: none;
+    }
+    .brand-panel::after {
+      content: '';
+      position: absolute;
+      width: 380px;
+      height: 380px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(230,57,70,0.12) 0%, transparent 70%);
+      bottom: -80px;
+      left: -80px;
+      pointer-events: none;
+    }
+
+    .blob-mid {
+      position: absolute;
+      width: 300px;
+      height: 300px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(255,100,120,0.08) 0%, transparent 70%);
+      top: 50%;
+      left: 20%;
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+
+    .brand-panel .grid-overlay {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+      background-size: 48px 48px;
+      pointer-events: none;
+    }
+
+    .brand-content {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      max-width: 380px;
+    }
+
+    .brand-logo {
+      width: 240px;
+      max-width: 100%;
+      margin-bottom: 2.5rem;
+      filter: drop-shadow(0 8px 32px rgba(230,57,70,0.25));
+    }
+
+    .brand-divider {
+      width: 48px;
+      height: 3px;
+      background: linear-gradient(90deg, #e63946, #ff6b7a);
+      border-radius: 2px;
+      margin: 0 auto 1.5rem;
+    }
+
+    .brand-headline {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #ffffff;
+      line-height: 1.3;
+      margin-bottom: 0.75rem;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-sub {
+      font-size: 0.95rem;
+      color: rgba(255,255,255,0.45);
+      line-height: 1.6;
+    }
+
+    /* ── Right form panel ── */
+    .form-panel {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .form-inner {
+      width: 100%;
+      max-width: 380px;
+    }
+
+    .form-header { margin-bottom: 2.5rem; }
+
+    .form-eyebrow {
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #e63946;
+      margin-bottom: 0.6rem;
+    }
+
+    .form-title {
+      font-size: 1.85rem;
+      font-weight: 700;
+      color: #111827;
+      letter-spacing: -0.03em;
+      line-height: 1.2;
+    }
+
+    .form-subtitle {
+      margin-top: 0.5rem;
+      font-size: 0.9rem;
+      color: #6b7280;
+    }
+
+    .field-label {
+      display: block;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 0.5rem;
+      letter-spacing: 0.01em;
+    }
+
+    .field-wrap { position: relative; }
+
+    .field-icon {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #9ca3af;
+      font-size: 1rem;
+    }
+
+    .field-input {
+      width: 100%;
+      padding: 0.75rem 2.75rem 0.75rem 2.5rem;
+      border: 1.5px solid #e5e7eb;
+      border-radius: 10px;
+      font-size: 0.95rem;
+      font-family: inherit;
+      color: #111827;
+      background: #fafafa;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+    }
+
+    .field-input:focus {
+      border-color: #e63946;
+      background: #fff;
+      box-shadow: 0 0 0 3px rgba(230,57,70,0.1);
+    }
+
+    .toggle-pw {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 2px;
+      color: #9ca3af;
+      display: flex;
+      align-items: center;
+      transition: color 0.15s;
+    }
+    .toggle-pw:hover { color: #374151; }
+
+    .btn-submit {
+      width: 100%;
+      margin-top: 1.5rem;
+      padding: 0.85rem;
+      background: linear-gradient(135deg, #e63946 0%, #c0303b 100%);
+      color: #fff;
+      font-family: inherit;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s, box-shadow 0.15s;
+      box-shadow: 0 4px 16px rgba(230,57,70,0.35);
+      letter-spacing: 0.01em;
+    }
+    .btn-submit:hover { opacity: 0.93; box-shadow: 0 6px 20px rgba(230,57,70,0.45); }
+    .btn-submit:active { transform: scale(0.99); }
+
+    .error-box {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      padding: 0.65rem 0.9rem;
+      margin-bottom: 1.25rem;
+      font-size: 0.85rem;
+      color: #dc2626;
+    }
+    .error-dot { width: 6px; height: 6px; border-radius: 50%; background: #dc2626; flex-shrink: 0; }
+
+    .form-footer {
+      margin-top: 2rem;
+      text-align: center;
+      font-size: 0.78rem;
+      color: #9ca3af;
+    }
+
+    @media (max-width: 720px) {
+      body { flex-direction: column; }
+      .brand-panel { width: 100%; min-height: auto; padding: 2.5rem 2rem 2rem; }
+      .brand-logo { width: 180px; margin-bottom: 1.5rem; }
+      .brand-headline { font-size: 1.25rem; }
+      .form-panel { padding: 2rem 1.5rem 3rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="brand-panel">
+    <div class="grid-overlay"></div>
+    <div class="blob-mid"></div>
+    <div class="brand-content">
+      <img src="/vantagefit-logo.png" alt="Vantage Fit" class="brand-logo" />
+      <div class="brand-divider"></div>
+      <h2 class="brand-headline">A Wellness Platform<br/>Employees Love to Use</h2>
+      <p class="brand-sub">Improving wellness across global organizations — manage your clients, renewals, and revenue in one place.</p>
+    </div>
+  </div>
+
+  <div class="form-panel">
+    <div class="form-inner">
+      <div class="form-header">
+        <div class="form-eyebrow">Secure access</div>
+        <h1 class="form-title">Welcome back</h1>
+        <p class="form-subtitle">Enter your password to access the dashboard.</p>
+      </div>
+
+      {loginError && (
+        <div class="error-box">
+          <div class="error-dot"></div>
+          {loginError}
+        </div>
+      )}
+
+      <form method="POST">
+        <div style="margin-bottom: 1rem;">
+          <label for="password" class="field-label">Password</label>
+          <div class="field-wrap">
+            <svg class="field-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+              <path d="M8 1a2 2 0 0 1 2 2v4H6V3a2 2 0 0 1 2-2zm3 6V3a3 3 0 0 0-6 0v4a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/>
+            </svg>
+            <input
+              type="password"
+              id="password"
+              name="password"
+              class="field-input"
+              placeholder="Enter your password"
+              required
+              autofocus
+            />
+            <button type="button" class="toggle-pw" id="togglePw" aria-label="Show password">
+              <svg id="eyeIcon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16">
+                <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/>
+                <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/>
+              </svg>
+              <svg id="eyeSlashIcon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16" style="display:none">
+                <path d="M13.359 11.238C15.06 9.72 16 8 16 8s-3-5.5-8-5.5a7.028 7.028 0 0 0-2.79.588l.77.771A5.944 5.944 0 0 1 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.134 13.134 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755-.165.165-.337.328-.517.486l.708.709z"/>
+                <path d="M11.297 9.176a3.5 3.5 0 0 0-4.474-4.474l.823.823a2.5 2.5 0 0 1 2.829 2.829l.822.822zm-2.943 1.299.822.822a3.5 3.5 0 0 1-4.474-4.474l.823.823a2.5 2.5 0 0 0 2.829 2.829z"/>
+                <path d="M3.35 5.47c-.18.16-.353.322-.518.487A13.134 13.134 0 0 0 1.172 8l.195.288c.335.48.83 1.12 1.465 1.755C4.121 11.332 5.881 12.5 8 12.5c.716 0 1.39-.133 2.02-.36l.77.772A7.029 7.029 0 0 1 8 13.5C3 13.5 0 8 0 8s.939-1.721 2.641-3.238l.708.709zm10.296 8.884-12-12 .708-.708 12 12-.708.708z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <button type="submit" class="btn-submit" {rateLimited ? 'disabled' : ''}>Sign In →</button>
+      </form>
+
+      <div class="form-footer">
+        Internal tool · Vantage Fit &copy; {new Date().getFullYear()}
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const btn = document.getElementById('togglePw');
+    const input = document.getElementById('password') as HTMLInputElement;
+    const eyeOn = document.getElementById('eyeIcon');
+    const eyeOff = document.getElementById('eyeSlashIcon');
+    btn?.addEventListener('click', () => {
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      eyeOn!.style.display = show ? 'none' : '';
+      eyeOff!.style.display = show ? '' : 'none';
+    });
+  </script>
+</body>
+</html>

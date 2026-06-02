@@ -1,0 +1,591 @@
+---
+
+import { currentFY, fyLabel, isSubscription, isOnetime, isMultiyear, prorateCvForFy, fyOfDate, contractValueForDisplay, getLiveFxRates } from '../lib/revenue';
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const today = new Date();
+const todayFyStart = currentFY();
+const fy_label = fyLabel(todayFyStart);
+const fy_range = `Apr ${todayFyStart} – Mar ${todayFyStart + 1}`;
+
+const db = (Astro.locals as any).runtime.env.DB;
+const [fxRates, batchResults] = await Promise.all([
+  getLiveFxRates(),
+  db.batch([
+    db.prepare('SELECT * FROM clients ORDER BY company_name'),
+    db.prepare('SELECT * FROM extra_revenue'),
+    db.prepare('SELECT * FROM sub_history'),
+  ]),
+]) as [Record<string, number>, any[]];
+const _rawClients = batchResults[0].results as any[];
+const _rawErRows  = batchResults[1].results as any[];
+const _rawShRows  = batchResults[2].results as any[];
+
+function toUSD(amount: number, currency: string): number {
+  const rate = fxRates[(currency || 'USD').toUpperCase()] ?? 1;
+  return amount / rate;
+}
+
+const allClients = _rawClients.filter((c: any) => c.region ? c.region !== 'North America' : (c.type || '') !== 'Annual');
+const _indiaIds  = new Set(allClients.map((c: any) => c.id));
+const erRows     = _rawErRows.filter((r: any) => r.financial_year === todayFyStart && _indiaIds.has(r.client_id));
+const shRows     = _rawShRows.filter((r: any) => r.financial_year === todayFyStart && _indiaIds.has(r.client_id));
+
+const allSubHist = _rawShRows.filter((r: any) => _indiaIds.has(r.client_id));
+const clientsWithSubHist = new Set(allSubHist.map((r: any) => r.client_id));
+
+const subHistAllByClient: Record<number, Array<{ financial_year: number; amount: number; currency: string }>> = {};
+for (const row of allSubHist) {
+  if (!subHistAllByClient[row.client_id]) subHistAllByClient[row.client_id] = [];
+  subHistAllByClient[row.client_id].push({ financial_year: row.financial_year, amount: row.amount || 0, currency: row.currency || 'USD' });
+}
+
+const licByCid: Record<number, number> = {};
+const rpByCid: Record<number, number> = {};
+for (const row of erRows) {
+  const cid = row.client_id;
+  const amt = toUSD(row.amount || 0, row.currency || 'USD');
+  if (row.type === 'Additional Licenses') licByCid[cid] = (licByCid[cid] || 0) + amt;
+  else rpByCid[cid] = (rpByCid[cid] || 0) + amt;
+}
+
+const subHistByCid: Record<number, number> = {};
+for (const row of shRows) {
+  const cid = row.client_id;
+  subHistByCid[cid] = (subHistByCid[cid] || 0) + toUSD(row.amount || 0, row.currency || 'USD');
+}
+
+const fyMap: Record<number, any> = {};
+for (const c of allClients) {
+  const cv = c.contract_value || 0;
+  const cur = c.currency || 'USD';
+  const ctype = c.type || '';
+  let fyShare = 0;
+
+  if (clientsWithSubHist.has(c.id)) {
+    fyShare = subHistByCid[c.id] || 0;
+  } else if (cv > 0) {
+    const fyOverride = c.contract_fy_override || null;
+    if (fyOverride) {
+      if (fyOverride === todayFyStart) fyShare = toUSD(cv, cur);
+    } else if (isSubscription(ctype) || ctype === 'Annual') {
+      if (isMultiyear(c.agreement_start_date, c.agreement_end_date)) {
+        fyShare = toUSD(prorateCvForFy(c.agreement_start_date, c.agreement_end_date, cv, todayFyStart), cur);
+      } else {
+        if (fyOfDate(c.agreement_start_date) === todayFyStart) fyShare = toUSD(cv, cur);
+      }
+    } else if (isOnetime(ctype)) {
+      const startFy = fyOfDate(c.agreement_start_date) ?? fyOfDate(c.campaign_start_date);
+      if (startFy === todayFyStart) fyShare = toUSD(cv, cur);
+    }
+  }
+
+  const fyLic = licByCid[c.id] || 0;
+  const fyRp  = rpByCid[c.id] || 0;
+  const fyContract = fyShare + fyLic;
+  const fyTotal = fyContract + fyRp;
+
+  if (fyContract > 0 || fyRp > 0) {
+    const cvDisplay = contractValueForDisplay(c, subHistAllByClient[c.id] || [], toUSD);
+    fyMap[c.id] = {
+      ...c,
+      fy_share:    Math.round(fyShare),
+      fy_contract: Math.round(fyContract),
+      fy_rp:       Math.round(fyRp),
+      fy_total:    Math.round(fyTotal),
+      cv_usd:      cvDisplay ? cvDisplay.usd : null,
+    };
+  }
+}
+
+const fyClients = Object.values(fyMap).sort((a, b) => b.fy_total - a.fy_total);
+const fyContractTotal = fyClients.reduce((s, c) => s + c.fy_contract, 0);
+const fyRpTotal       = fyClients.reduce((s, c) => s + c.fy_rp, 0);
+const fyGrandTotal    = fyContractTotal + fyRpTotal;
+const maxClientTotal  = fyClients.length > 0 ? fyClients[0].fy_total : 1;
+
+const AVATAR_COLORS = ['#0ba882','#3b5bdb','#e8900a','#6741d9','#f15162','#0d9adb','#2d9c4e','#c2255c','#1971c2','#5c7cfa'];
+
+function fmtMoney(n: number) { return new Intl.NumberFormat('en-US').format(Math.round(n)); }
+function getInitials(name: string) { return name.split(/\s+/).slice(0,2).map((w: string) => w[0] || '').join('').toUpperCase(); }
+---
+
+<BaseLayout title={`${fy_label} Revenue`}>
+
+<style is:global>
+/* ─── FY Revenue Page ─────────────────────────────── */
+.fyr-page { --clr-contract: #0ba882; --clr-rp: #e8900a; --clr-total: #3b5bdb; --clr-count: #6741d9; }
+
+/* ── KPI grid ──────────────────────────────────────── */
+.fyr-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 20px;
+}
+@media (max-width: 900px) { .fyr-kpi-row { grid-template-columns: repeat(2,1fr); } }
+
+.fyr-kpi-card {
+  background: #fff;
+  border: 1px solid #eaeaf2;
+  border-radius: 10px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+  overflow: hidden;
+}
+.fyr-kpi-card::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  border-radius: 10px 10px 0 0;
+}
+.fyr-kpi-card.kpi-contract::after { background: var(--clr-contract); }
+.fyr-kpi-card.kpi-rp::after       { background: var(--clr-rp); }
+.fyr-kpi-card.kpi-total::after    { background: var(--clr-total); }
+.fyr-kpi-card.kpi-count::after    { background: var(--clr-count); }
+
+.fyr-kpi-icon {
+  width: 34px; height: 34px;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+.kpi-contract .fyr-kpi-icon { background: #e6f9f5; color: var(--clr-contract); }
+.kpi-rp       .fyr-kpi-icon { background: #fef3e2; color: var(--clr-rp); }
+.kpi-total    .fyr-kpi-icon { background: #edf2ff; color: var(--clr-total); }
+.kpi-count    .fyr-kpi-icon { background: #f3f0ff; color: var(--clr-count); }
+
+.fyr-kpi-body { min-width: 0; }
+
+.fyr-kpi-label {
+  font-size: 0.55rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: #9fa8b8;
+  margin-bottom: 2px;
+}
+.fyr-kpi-value {
+  font-size: 1.18rem;
+  font-weight: 800;
+  line-height: 1;
+  color: #1a1a2e;
+  letter-spacing: -0.02em;
+}
+.fyr-kpi-sub {
+  font-size: 0.58rem;
+  color: #c0c8d8;
+  margin-top: 2px;
+}
+
+/* ── Toolbar ───────────────────────────────────────── */
+.fyr-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.fyr-search-wrap {
+  position: relative;
+  max-width: 260px;
+  flex: 1;
+}
+.fyr-search-wrap i {
+  position: absolute; left: 11px; top: 50%;
+  transform: translateY(-50%);
+  color: #c0c8d8; font-size: 0.78rem; pointer-events: none;
+}
+.fyr-search {
+  width: 100%;
+  border: 1px solid #e8eaf0;
+  border-radius: 8px;
+  padding: 7px 12px 7px 32px;
+  font-size: 0.78rem;
+  color: #2c2c4a;
+  background: #fff;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.fyr-search:focus { border-color: #0ba882; box-shadow: 0 0 0 3px rgba(11,168,130,0.08); }
+.fyr-count-chip {
+  font-size: 0.67rem; color: #8e98a8;
+  background: #f2f4f8; border-radius: 20px;
+  padding: 4px 10px; font-weight: 600;
+}
+.fyr-action-btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid #e8eaf0;
+  background: #fff;
+  font-size: 0.73rem; font-weight: 600;
+  color: #3c4458;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.fyr-action-btn:hover { background: #f5f7fc; border-color: #d0d4e0; }
+.fyr-action-btn .export-icon { color: #1d6f42; }
+
+/* ── Table card ────────────────────────────────────── */
+.fyr-table-card {
+  background: #fff;
+  border: 1px solid #eaeaf2;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.04);
+}
+
+/* thead */
+.fyr-thead th {
+  background: #f8f9fb !important;
+  color: #8e98a6 !important;
+  font-size: 0.57rem !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.1em !important;
+  padding: 10px 14px !important;
+  border: none !important;
+  border-bottom: 1px solid #eaeaf2 !important;
+  white-space: nowrap; vertical-align: middle;
+}
+.fyr-thead th.sortable { cursor: pointer; user-select: none; }
+.fyr-thead th.sortable:hover { background: #eff1f6 !important; }
+.fyr-thead th.sortable::after { content: " ⇅"; opacity: 0.28; font-size: 0.58rem; }
+.fyr-thead th.sortable[data-sort="asc"]::after  { content: " ↑"; opacity: 1; color: #0ba882; }
+.fyr-thead th.sortable[data-sort="desc"]::after { content: " ↓"; opacity: 1; color: #0ba882; }
+
+/* tbody */
+.fyr-table { border-collapse: collapse; width: 100%; }
+.fyr-table tbody tr { border-bottom: 1px solid #f2f4f8; transition: background 0.1s; }
+.fyr-table tbody tr:last-child { border-bottom: none; }
+.fyr-table tbody tr:hover { background: #f6fbf9 !important; }
+.fyr-table td { padding: 10px 14px !important; border: none !important; vertical-align: middle; }
+
+/* rank */
+.fyr-rank {
+  font-size: 0.68rem; font-weight: 700;
+  color: #d0d4e4; text-align: center; width: 32px;
+}
+.fyr-rank.gold   { color: #f5a623; }
+.fyr-rank.silver { color: #a0aab4; }
+.fyr-rank.bronze { color: #c06a10; }
+
+/* avatar */
+.fyr-avatar {
+  width: 34px; height: 34px;
+  border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.68rem; font-weight: 800;
+  flex-shrink: 0; color: #fff;
+}
+
+/* client cell */
+.fyr-client-cell { display: flex; align-items: center; gap: 10px; }
+.fyr-client-info { flex: 1; min-width: 0; }
+.fyr-client-name {
+  font-weight: 600; font-size: 0.82rem;
+  color: #1a1a2e; text-decoration: none;
+  line-height: 1.3; display: block;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 210px;
+}
+.fyr-client-name:hover { color: #0ba882; }
+.fyr-client-meta { display: flex; align-items: center; gap: 5px; margin-top: 3px; }
+.fyr-cid {
+  font-size: 0.6rem; color: #0ba882;
+  background: #e6f9f5; padding: 1px 6px;
+  border-radius: 4px; font-weight: 700; letter-spacing: 0.04em;
+}
+
+/* numbers */
+.fyr-num-contract { font-size: 0.83rem; font-weight: 700; color: #0ba882; }
+.fyr-num-rp    { font-size: 0.78rem; font-weight: 700; color: #e8900a; }
+.fyr-num-total { font-size: 0.86rem; font-weight: 800; color: #1a1a2e; }
+.fyr-num-cv    { font-size: 0.71rem; color: #9fa8b8; font-style: italic; }
+.fyr-dash      { color: #d8dae8; }
+
+/* bar col */
+.fyr-bar-cell  { padding-right: 18px !important; }
+.fyr-bar-wrap  {
+  width: 72px; height: 5px;
+  background: #f0f2f8; border-radius: 3px;
+  overflow: hidden; display: inline-block; vertical-align: middle;
+}
+.fyr-bar-fill  {
+  height: 100%;
+  background: linear-gradient(90deg, #0ba882, #07d4a8);
+  border-radius: 3px;
+}
+.fyr-bar-pct   { font-size: 0.58rem; color: #c0c8d8; margin-left: 5px; vertical-align: middle; }
+
+/* tfoot */
+.fyr-tfoot tr  { background: #f8f9fb !important; border-top: 2px solid #eaeaf2 !important; }
+.fyr-tfoot td  { padding: 11px 14px !important; border: none !important; }
+.fyr-tfoot-lbl { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #a0a8b4; }
+
+/* print */
+@media print {
+  .fyr-toolbar, .fyr-bar-cell, .fyr-bar-wrap, .fyr-bar-pct { display: none !important; }
+  .fyr-kpi-card { break-inside: avoid; }
+}
+/* mobile */
+@media (max-width: 767px) {
+  .fyr-kpi-row { grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 14px; }
+  .fyr-kpi-card { padding: 10px 12px; gap: 10px; }
+  .fyr-kpi-value { font-size: 1rem; }
+  .fyr-kpi-sub { display: none; }
+  .fyr-toolbar { flex-wrap: wrap; gap: 6px; }
+  .fyr-search-wrap { max-width: 100%; flex: 1 1 140px; }
+  /* table: horizontal scroll, hide low-value columns */
+  .fyr-table-card { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .fyr-table { min-width: 540px; }
+  .fyr-col-hide { display: none; }
+}
+</style>
+
+<div class="page-topbar">
+  <a href="/" class="back-link"><i class="bi bi-arrow-left"></i> Dashboard</a>
+  <div style="width:1px;height:24px;background:#eee;"></div>
+  <div>
+    <p class="page-title mb-0">FY Revenue</p>
+    <p style="font-size:0.64rem;color:#c0c0cc;margin:0;line-height:1.2;">{fy_label} &middot; {fy_range} &middot; All values in USD</p>
+  </div>
+</div>
+
+<div class="container-fluid px-4 fyr-page">
+
+  <!-- ── KPI Cards ──────────────────────────────────── -->
+  <div class="fyr-kpi-row">
+    <div class="fyr-kpi-card kpi-contract">
+      <div class="fyr-kpi-icon"><i class="bi bi-briefcase-fill"></i></div>
+      <div class="fyr-kpi-body">
+        <div class="fyr-kpi-label">Contract Revenue</div>
+        <div class="fyr-kpi-value">${fmtMoney(fyContractTotal)}</div>
+        <div class="fyr-kpi-sub">Subscriptions + Add-ons</div>
+      </div>
+    </div>
+    <div class="fyr-kpi-card kpi-rp">
+      <div class="fyr-kpi-icon"><i class="bi bi-gift-fill"></i></div>
+      <div class="fyr-kpi-body">
+        <div class="fyr-kpi-label">Reward Points</div>
+        <div class="fyr-kpi-value" style="color:#e8900a;">{fyRpTotal > 0 ? `$${fmtMoney(fyRpTotal)}` : '—'}</div>
+        <div class="fyr-kpi-sub">Additional revenue stream</div>
+      </div>
+    </div>
+    <div class="fyr-kpi-card kpi-total">
+      <div class="fyr-kpi-icon"><i class="bi bi-graph-up-arrow"></i></div>
+      <div class="fyr-kpi-body">
+        <div class="fyr-kpi-label">Grand Total</div>
+        <div class="fyr-kpi-value" style="color:#3b5bdb;">${fmtMoney(fyGrandTotal)}</div>
+        <div class="fyr-kpi-sub">Combined FY revenue</div>
+      </div>
+    </div>
+    <div class="fyr-kpi-card kpi-count">
+      <div class="fyr-kpi-icon"><i class="bi bi-buildings-fill"></i></div>
+      <div class="fyr-kpi-body">
+        <div class="fyr-kpi-label">Revenue Clients</div>
+        <div class="fyr-kpi-value" style="color:#6741d9;">{fyClients.length}</div>
+        <div class="fyr-kpi-sub">Generating revenue this FY</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Toolbar ────────────────────────────────────── -->
+  <div class="fyr-toolbar">
+    <div class="fyr-search-wrap">
+      <i class="bi bi-search"></i>
+      <input type="text" id="searchBox" class="fyr-search" placeholder="Search clients…" />
+    </div>
+    <span class="fyr-count-chip" id="visibleCount">{fyClients.length} clients</span>
+    <div style="flex:1;"></div>
+    <button onclick="window.print()" class="fyr-action-btn">
+      <i class="bi bi-printer"></i> Print
+    </button>
+    <button onclick="exportRevenue()" class="fyr-action-btn">
+      <i class="bi bi-file-earmark-excel-fill export-icon"></i> Export
+    </button>
+  </div>
+
+  <!-- ── Table ──────────────────────────────────────── -->
+  <div class="fyr-table-card mb-4">
+    <table class="table fyr-table mb-0" id="revTable">
+      <thead class="fyr-thead">
+        <tr>
+          <th class="sortable">Client</th>
+          <th class="sortable">Type / Status</th>
+          <th class="text-center sortable fyr-col-hide">Employees</th>
+          <th class="text-center sortable fyr-col-hide">Contract Value</th>
+          <th class="text-center sortable">
+            Revenue
+            <span style="font-weight:400;opacity:0.55;text-transform:none;letter-spacing:0;font-size:0.5rem;"> ({fy_label})</span>
+          </th>
+          <th class="text-center sortable">+ Reward Pts</th>
+          <th class="text-center sortable">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {fyClients.length > 0 ? fyClients.map((c: any, idx: number) => {
+          const initials = getInitials(c.company_name);
+          const avatarColor = AVATAR_COLORS[c.id % AVATAR_COLORS.length];
+          const barPct = Math.round((c.fy_total / maxClientTotal) * 100);
+          const sharePct = fyGrandTotal > 0 ? Math.round((c.fy_total / fyGrandTotal) * 100) : 0;
+          const rankClass = idx === 0 ? 'gold' : idx === 1 ? 'silver' : idx === 2 ? 'bronze' : '';
+          return (
+          <tr>
+            <td>
+              <div class="fyr-client-cell">
+                <div class="fyr-avatar" style={`background:${avatarColor}`}>{initials}</div>
+                <div class="fyr-client-info">
+                  <a href={`/client/${c.id}?back=${encodeURIComponent('/fy-revenue')}`} class="fyr-client-name">
+                    {c.company_name}
+                  </a>
+                  <div class="fyr-client-meta">
+                    {c.company_id && <span class="fyr-cid">{c.company_id}</span>}
+                    {c.contact_email && <span style="font-size:0.61rem;color:#b8b8cc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;">{c.contact_email}</span>}
+                  </div>
+                </div>
+              </div>
+            </td>
+            <td>
+              <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start;">
+                {isSubscription(c.type || '')
+                  ? <span class="badge badge-annual">Annual</span>
+                  : <span class="badge badge-onetime">One Time</span>
+                }
+                {(() => {
+                  const s = c.status || '';
+                  if (s === 'Active') return <span class="badge badge-active">Active</span>;
+                  if (s.includes('Active') || s.includes('Repeat')) return <span class="badge badge-repeat">{s}</span>;
+                  if (s === 'Churn') return <span class="badge badge-churn">Churn</span>;
+                  return <span class="badge badge-inactive">{s}</span>;
+                })()}
+              </div>
+            </td>
+            <td class="text-center fyr-col-hide" style="color:#aaa;font-size:0.78rem;">
+              {c.employee_base || <span class="fyr-dash">—</span>}
+            </td>
+            <td class="text-center fyr-col-hide">
+              {c.cv_usd
+                ? <span class="fyr-num-cv">${fmtMoney(c.cv_usd)}</span>
+                : <span class="fyr-dash">—</span>
+              }
+            </td>
+            <td class="text-center">
+              {c.fy_contract > 0
+                ? <span class="fyr-num-contract">${fmtMoney(c.fy_contract)}</span>
+                : <span class="fyr-dash">—</span>
+              }
+            </td>
+            <td class="text-center">
+              {c.fy_rp > 0
+                ? <span class="fyr-num-rp">${fmtMoney(c.fy_rp)}</span>
+                : <span class="fyr-dash">—</span>
+              }
+            </td>
+            <td class="text-center">
+              <span class="fyr-num-total">${fmtMoney(c.fy_total)}</span>
+            </td>
+          </tr>
+          );
+        }) : (
+        <tr>
+          <td colspan="7" class="text-center py-5" style="color:#ccc;">
+            <i class="bi bi-inbox" style="font-size:2rem;display:block;margin-bottom:10px;opacity:0.4;"></i>
+            No clients with revenue in {fy_label}.
+          </td>
+        </tr>
+        )}
+      </tbody>
+
+      {fyClients.length > 0 && (
+      <tfoot class="fyr-tfoot">
+        <tr>
+          <td colspan="2">
+            <span class="fyr-tfoot-lbl">{fyClients.length} clients &middot; {fy_label}</span>
+          </td>
+          <td class="fyr-col-hide"></td>
+          <td class="fyr-col-hide"></td>
+          <td class="text-center">
+            <span class="fyr-num-contract">${fmtMoney(fyContractTotal)}</span>
+          </td>
+          <td class="text-center">
+            {fyRpTotal > 0
+              ? <span class="fyr-num-rp">${fmtMoney(fyRpTotal)}</span>
+              : <span style="color:#d8d8e8;font-size:0.75rem;">$0</span>
+            }
+          </td>
+          <td class="text-center">
+            <span class="fyr-num-total" style="font-size:0.9rem;">${fmtMoney(fyGrandTotal)}</span>
+          </td>
+        </tr>
+      </tfoot>
+      )}
+    </table>
+  </div>
+
+</div>
+
+<script is:inline>
+(function () {
+  var totalRows = document.querySelectorAll('#revTable tbody tr[data-visible!="false"]').length;
+  var searchBox = document.getElementById('searchBox');
+  var countChip = document.getElementById('visibleCount');
+
+  searchBox.addEventListener('keyup', function () {
+    var q = this.value.trim().toLowerCase();
+    var visible = 0;
+    document.querySelectorAll('#revTable tbody tr').forEach(function (row) {
+      var show = !q || row.innerText.toLowerCase().includes(q);
+      row.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    if (countChip) countChip.textContent = visible + ' client' + (visible !== 1 ? 's' : '');
+  });
+
+  document.querySelectorAll('.fyr-thead th.sortable').forEach(function (th) {
+    th.addEventListener('click', function () {
+      var colIdx = [...th.closest('tr').children].indexOf(th);
+      var tbody = th.closest('table').querySelector('tbody');
+      var asc = th.dataset.sort !== 'asc';
+      th.closest('thead').querySelectorAll('th').forEach(function (t) { delete t.dataset.sort; });
+      th.dataset.sort = asc ? 'asc' : 'desc';
+      [...tbody.querySelectorAll('tr')].sort(function (a, b) {
+        var va = (a.cells[colIdx] && a.cells[colIdx].innerText.trim()) || '';
+        var vb = (b.cells[colIdx] && b.cells[colIdx].innerText.trim()) || '';
+        return asc ? va.localeCompare(vb, undefined, { numeric: true })
+                   : vb.localeCompare(va, undefined, { numeric: true });
+      }).forEach(function (r) { tbody.appendChild(r); });
+    });
+  });
+})();
+</script>
+
+<script is:inline src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script is:inline>
+function exportRevenue() {
+  var table = document.getElementById('revTable');
+  if (!table || typeof XLSX === 'undefined') return;
+  var headers = [...table.querySelectorAll('thead th')]
+    .slice(0, -1)
+    .map(function (th) { return th.innerText.trim(); })
+    .filter(function (h) { return h; });
+  var rows = [...table.querySelectorAll('tbody tr')]
+    .filter(function (tr) { return tr.style.display !== 'none' && tr.querySelector('a'); })
+    .map(function (tr) {
+      return [...tr.querySelectorAll('td')].slice(0, -1).map(function (td) { return td.innerText.trim(); });
+    });
+  var wb = XLSX.utils.book_new();
+  var ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  ws['!cols'] = headers.map(function (_, i) { return { wch: i === 1 ? 32 : 16 }; });
+  XLSX.utils.book_append_sheet(wb, ws, 'FY Revenue');
+  XLSX.writeFile(wb, 'fy-revenue-' + new Date().getFullYear() + '.xlsx');
+}
+window.exportRevenue = exportRevenue;
+</script>
+
+</BaseLayout>

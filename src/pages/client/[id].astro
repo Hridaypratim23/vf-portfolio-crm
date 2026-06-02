@@ -1,0 +1,1148 @@
+---
+import {
+  getExtraRevenueSumForClient, getExtraRevenueSumForClientFY,
+} from '../../lib/db';
+import { getClientRevenueSummary, currentFY, fyLabel, contractValueForDisplay, getLiveFxRates, parseDate, isSubscription } from '../../lib/revenue';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+
+const db = (Astro.locals as any).runtime.env.DB;
+const { id } = Astro.params;
+const clientId = parseInt(id || '0');
+
+const ALLOWED_BACKS: Record<string, string> = {
+  '/':                    'Dashboard',
+  '/clients':             'All Clients',
+  '/clients?filter=active': 'Active Clients',
+  '/renewals':            'Renewals',
+  '/fy-revenue':          'FY Revenue',
+};
+const rawBack  = Astro.url.searchParams.get('back') || '';
+const isFinanceData = rawBack.startsWith('/finance-data');
+const backHref  = ALLOWED_BACKS[rawBack] ? rawBack : isFinanceData ? rawBack : '/clients';
+const backLabel = ALLOWED_BACKS[rawBack] || (isFinanceData ? 'Finance Data' : 'All Clients');
+
+const [fxRates, batchResults] = await Promise.all([
+  getLiveFxRates(),
+  db.batch([
+    db.prepare('SELECT * FROM clients WHERE id = ?').bind(clientId),
+    db.prepare('SELECT * FROM activities WHERE client_id = ? ORDER BY created_at DESC').bind(clientId),
+    db.prepare('SELECT * FROM agreements WHERE client_id = ? ORDER BY uploaded_at DESC').bind(clientId),
+    db.prepare('SELECT * FROM extra_revenue WHERE client_id = ? ORDER BY financial_year DESC').bind(clientId),
+    db.prepare('SELECT * FROM sub_history WHERE client_id = ? ORDER BY financial_year DESC').bind(clientId),
+  ]),
+]);
+
+const client     = (batchResults[0].results as any[])[0] ?? null;
+if (!client) return Astro.redirect('/');
+const activities   = batchResults[1].results as any[];
+const agreements   = batchResults[2].results as any[];
+const extraRevenue = batchResults[3].results as any[];
+const subHist      = batchResults[4].results as any[];
+
+const fy = currentFY();
+const extraLicAll = getExtraRevenueSumForClient(extraRevenue, clientId, 'lic');
+const extraRpAll  = getExtraRevenueSumForClient(extraRevenue, clientId, 'rp');
+const extraLicCur = getExtraRevenueSumForClientFY(extraRevenue, clientId, 'lic', fy);
+const extraRpCur  = getExtraRevenueSumForClientFY(extraRevenue, clientId, 'rp', fy);
+
+function _toUSD(amount: number, currency: string): number {
+  const rate = fxRates[(currency || 'USD').toUpperCase()] ?? 1;
+  return amount / rate;
+}
+const latestCv = contractValueForDisplay(client, subHist, _toUSD);
+
+const revSummary = getClientRevenueSummary(
+  client, subHist, extraLicAll, extraRpAll, extraLicCur, extraRpCur, fy
+);
+
+// Reward points grouped by their actual currency (so INR ≠ USD)
+const rpAllByCur: Record<string, number> = {};
+const rpCurByCur: Record<string, number> = {};
+for (const r of extraRevenue) {
+  if (r.type !== 'Additional Licenses') {
+    const cur = (r.currency || 'USD').toUpperCase();
+    rpAllByCur[cur] = (rpAllByCur[cur] || 0) + (r.amount || 0);
+    if (r.financial_year === fy)
+      rpCurByCur[cur] = (rpCurByCur[cur] || 0) + (r.amount || 0);
+  }
+}
+const rpAllEntries  = Object.entries(rpAllByCur).map(([cur, amt]) => ({ cur, amt: Math.round(amt) }));
+const rpCurEntries  = Object.entries(rpCurByCur).map(([cur, amt]) => ({ cur, amt: Math.round(amt) }));
+// Grand total only makes sense when RP is entirely in the same currency as subscription
+const rpSingleCur   = rpAllEntries.length === 1 && rpAllEntries[0].cur === revSummary.currency;
+const rpCurSingleCur = rpCurEntries.length === 1 && rpCurEntries[0].cur === revSummary.currency;
+
+const fyYears = Array.from({ length: 6 }, (_, i) => fy - 3 + i);
+
+// Contributor split totals (all converted to USD for comparison)
+const cxUSD    = subHist.filter(r => (r.contributor || 'Sales') === 'CX').reduce((s, r) => s + _toUSD(r.amount, r.currency), 0);
+const salesUSD = subHist.filter(r => (r.contributor || 'Sales') === 'Sales').reduce((s, r) => s + _toUSD(r.amount, r.currency), 0);
+const hasSplit = subHist.length > 0 && (cxUSD > 0 || salesUSD > 0);
+
+function fmtMoney(n: number) { return new Intl.NumberFormat('en-US').format(Math.round(n)); }
+
+const sparkMax = (subHist as any[]).length > 0
+  ? Math.max(...(subHist as any[]).map((r: any) => _toUSD(r.amount || 0, r.currency || 'USD')))
+  : 0;
+
+// Health score
+function clientHealth(): { label: string; cls: string; icon: string } {
+  const s = client.status || '';
+  if (s === 'Churn') return { label:'Churned',  cls:'health-churned',  icon:'bi-x-circle' };
+  if (s.toLowerCase().includes('inactive')) return { label:'Inactive', cls:'health-inactive', icon:'bi-dash-circle' };
+  if (!isSubscription(client.type || '')) return { label:'Active', cls:'health-healthy', icon:'bi-check-circle-fill' };
+  const end = parseDate(client.agreement_end_date);
+  if (!end) return { label:'Active', cls:'health-healthy', icon:'bi-check-circle-fill' };
+  const now = new Date();
+  const d   = (end.getTime() - now.getTime()) / 86400000;
+  if (d < 0)   return { label:'Overdue', cls:'health-overdue',  icon:'bi-exclamation-circle-fill' };
+  if (d <= 60) return { label:'At Risk', cls:'health-at-risk',  icon:'bi-exclamation-triangle-fill' };
+  return { label:'Healthy', cls:'health-healthy', icon:'bi-check-circle-fill' };
+}
+const health = clientHealth();
+
+// Inferred client timeline
+type TlEvent = { label: string; meta: string; note?: string; dotClass: string; sortKey: number };
+const tlEvents: TlEvent[] = [];
+if (client.agreement_start_date) {
+  const d = parseDate(client.agreement_start_date);
+  if (d) tlEvents.push({ label:'Agreement Signed', meta: client.agreement_start_date, dotClass:'dot-green', sortKey: d.getTime() });
+}
+if (client.campaign_start_date) {
+  const d = parseDate(client.campaign_start_date);
+  if (d) tlEvents.push({ label:'Campaign Started', meta: client.campaign_start_date, dotClass:'dot-blue', sortKey: d.getTime() });
+}
+for (const row of (subHist as any[])) {
+  const d = new Date(`${row.financial_year}-04-01`);
+  tlEvents.push({ label: `${fyLabel(row.financial_year)} Subscription`, meta: `${row.currency} ${fmtMoney(row.amount)}`, dotClass:'dot-blue', sortKey: d.getTime() });
+}
+for (const r of (extraRevenue as any[])) {
+  if ((r.amount || 0) > 0 && r.financial_year) {
+    const d = new Date(`${r.financial_year}-04-01`);
+    const lbl = r.type === 'Additional Licenses' ? `FY ${String(r.financial_year).slice(-2)}-${String(r.financial_year+1).slice(-2)} Extra Licenses` : `FY ${String(r.financial_year).slice(-2)}-${String(r.financial_year+1).slice(-2)} Reward Points`;
+    tlEvents.push({ label: lbl, meta: `${r.currency || 'USD'} ${fmtMoney(r.amount)}`, dotClass:'dot-orange', sortKey: d.getTime() + 1 });
+  }
+}
+if (client.agreement_end_date) {
+  const d = parseDate(client.agreement_end_date);
+  if (d) {
+    const expired = d < new Date();
+    tlEvents.push({ label: expired ? 'Agreement Expired' : 'Agreement Expires', meta: client.agreement_end_date, dotClass: expired ? 'dot-red' : 'dot-orange', sortKey: d.getTime() });
+  }
+}
+if ((activities as any[]).length > 0) {
+  const last = (activities as any[])[0];
+  const ts   = new Date(last.created_at).getTime();
+  tlEvents.push({ label: (last.activity_type || 'Activity') + ' Logged', meta: last.created_at?.slice(0,10) || '', note: last.note?.slice(0,60) + (last.note?.length > 60 ? '…' : ''), dotClass:'dot-gray', sortKey: ts });
+}
+tlEvents.sort((a, b) => b.sortKey - a.sortKey);
+
+const actIconMap: Record<string,string>  = { Note:'bi-sticky', Call:'bi-telephone', Email:'bi-envelope', Meeting:'bi-people', 'Follow-up':'bi-flag' };
+const actColorMap: Record<string,string> = { Note:'#8a8aaa', Call:'var(--midnight)', Email:'#0ba882', Meeting:'#c97a30', 'Follow-up':'var(--fit-red)' };
+const actBgMap: Record<string,string>    = { Note:'rgba(138,138,170,0.1)', Call:'rgba(41,41,76,0.08)', Email:'rgba(11,168,130,0.1)', Meeting:'rgba(201,122,48,0.1)', 'Follow-up':'rgba(241,81,98,0.1)' };
+
+const activeMonths: string[] = client.active_month
+  ? client.active_month.replace(/\//g, ',').split(',').map((m: string) => m.trim()).filter(Boolean)
+  : [];
+
+const contactEmails: string[] = client.contact_email
+  ? client.contact_email.split(',').map((e: string) => e.trim()).filter(Boolean)
+  : [];
+
+const extraTotal = extraRevenue.reduce((s: number, r: any) => s + (r.amount || 0), 0);
+---
+
+<BaseLayout title={client.company_name}>
+
+<div class="page-topbar">
+    <a href={backHref} class="back-link"><i class="bi bi-arrow-left"></i> <span>{backLabel}</span></a>
+    <div style="width:1px;height:24px;background:#eee;"></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+        <p class="page-title mb-0">{client.company_name}</p>
+        <span class={`health-badge ${health.cls}`}><i class={`bi ${health.icon}`}></i>{health.label}</span>
+    </div>
+    <div class="ms-auto d-flex gap-2">
+        <a href={`/edit/${client.id}?back=${encodeURIComponent(backHref)}`} class="btn-vfit" style="font-size:0.75rem;padding:5px 14px;"
+           onclick="event.preventDefault();location.replace(this.href)">
+            <i class="bi bi-pencil me-1"></i>Edit
+        </a>
+        <form method="POST" action={`/api/delete/${client.id}`}
+              data-async data-success-msg={`${client.company_name} deleted!`}
+              onsubmit={`return confirm('Delete ${client.company_name}? This cannot be undone.')`}>
+            <button class="btn-vfit-ghost" style="font-size:0.75rem;padding:5px 14px;color:#dc3545;border-color:#dc3545;background:rgba(220,53,69,0.08);">Delete</button>
+        </form>
+    </div>
+</div>
+
+<div class="container" style="padding-top: 1.5rem;">
+
+    <div class="row g-3">
+
+        <!-- Left: Client Details -->
+        <div class="col-md-7">
+            <div class="card vfit-card mb-3">
+                <div class="card-header d-flex align-items-center gap-2">
+                    <span style="width:24px;height:24px;border-radius:7px;background:rgba(41,41,76,0.08);display:inline-flex;align-items:center;justify-content:center;">
+                        <i class="bi bi-building" style="font-size:0.72rem;color:var(--midnight);"></i>
+                    </span>
+                    Client Details
+                </div>
+                <div class="card-body" style="padding:16px 20px;">
+                    <div class="row g-3">
+
+                        <div class="col-6">
+                            <div class="detail-label">Company ID</div>
+                            <div class="detail-value">{client.company_id || '—'}</div>
+                        </div>
+
+                        <div class="col-6">
+                            <div class="detail-label">Type</div>
+                            <div class="detail-value">
+                                {(client.type || '').includes('Subscription') ? (
+                                    <span class="badge badge-subscription">{client.type}</span>
+                                ) : client.type === 'Annual' ? (
+                                    <span class="badge badge-annual">{client.type}</span>
+                                ) : (
+                                    <span class="badge badge-onetime">{client.type}</span>
+                                )}
+                            </div>
+                        </div>
+
+                        <div class="col-6">
+                            <div class="detail-label">Status</div>
+                            <div class="detail-value">
+                                {(() => {
+                                    const s = client.status || '';
+                                    if (s === 'Active') return <span class="badge badge-active">Active</span>;
+                                    if (s.includes('Active')) return <span class="badge badge-repeat">{s}</span>;
+                                    if (s.includes('Repeat')) return <span class="badge badge-repeat">{s}</span>;
+                                    if (s === 'Churn') return <span class="badge badge-churn">Churn</span>;
+                                    return <span class="badge badge-inactive">{s}</span>;
+                                })()}
+                            </div>
+                        </div>
+
+                        <div class="col-6">
+                            <div class="detail-label">Employee Base</div>
+                            <div class="detail-value">{client.employee_base || '—'}</div>
+                        </div>
+
+                        <div class="col-6">
+                            <div class="detail-label">Region</div>
+                            <div class="detail-value">
+                                {client.region
+                                    ? <span style="display:inline-flex;align-items:center;gap:5px;background:rgba(11,168,130,0.10);color:#0ba882;border-radius:20px;padding:3px 12px;font-size:0.78rem;font-weight:600;"><i class="bi bi-globe-asia-australia"></i>India &amp; RoW</span>
+                                    : '—'}
+                            </div>
+                        </div>
+
+                        <div class="col-6">
+                            <div class="detail-label">CX POC</div>
+                            <div class="detail-value">{client.cx_poc || '—'}</div>
+                        </div>
+
+                        {latestCv && (
+                        <div class="col-12">
+                            <div style="background:linear-gradient(135deg,rgba(11,168,130,0.06),rgba(65,216,180,0.04));border:1px solid rgba(11,168,130,0.15);border-radius:10px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;">
+                                <div>
+                                    <div class="detail-label" style="margin-bottom:2px;">Contract Value</div>
+                                    <div style="font-size:1.1rem;font-weight:700;color:#0ba882;letter-spacing:-0.01em;">
+                                        USD {new Intl.NumberFormat('en-US').format(latestCv.usd)}
+                                    </div>
+                                    <div style="font-size:0.68rem;font-style:italic;color:#9090a8;margin-top:3px;">determined by the last financial agreement</div>
+                                </div>
+                                {!latestCv.isManual && latestCv.fy !== null ? (
+                                <div style="font-size:0.72rem;font-weight:600;color:#0ba882;background:rgba(11,168,130,0.10);padding:4px 10px;border-radius:20px;white-space:nowrap;">
+                                    {fyLabel(latestCv.fy)}
+                                </div>
+                                ) : null}
+                            </div>
+                        </div>
+                        )}
+
+                        <div class="col-12">
+                            <button id="viewMoreBtn" onclick="(function(){var el=document.getElementById('clientDetailsMore');var icon=document.getElementById('viewMoreIcon');var lbl=document.getElementById('viewMoreLbl');if(el.style.display==='none'){el.style.display='block';icon.className='bi bi-chevron-up me-1';lbl.textContent='View less';}else{el.style.display='none';icon.className='bi bi-chevron-down me-1';lbl.textContent='View more';}})()" style="background:none;border:none;color:#0ba882;font-size:0.8rem;font-weight:600;cursor:pointer;display:flex;align-items:center;padding:0;gap:2px;">
+                                <i class="bi bi-chevron-down me-1" id="viewMoreIcon"></i><span id="viewMoreLbl">View more</span>
+                            </button>
+                        </div>
+
+                        <div id="clientDetailsMore" class="col-12" style="display:none;">
+                            <div class="row g-3">
+
+                                <div class="col-6">
+                                    <div class="detail-label">Location (Contracted)</div>
+                                    <div class="detail-value">{client.location || '—'}</div>
+                                </div>
+
+                                <div class="col-6">
+                                    <div class="detail-label">Agreement Start</div>
+                                    <div class="detail-value">{client.agreement_start_date || '—'}</div>
+                                </div>
+
+                                <div class="col-6">
+                                    <div class="detail-label">Agreement End</div>
+                                    <div class="detail-value">{client.agreement_end_date || '—'}</div>
+                                </div>
+
+                                <div class="col-6">
+                                    <div class="detail-label">Campaign Start</div>
+                                    <div class="detail-value">{client.campaign_start_date || '—'}</div>
+                                </div>
+
+                                <div class="col-6">
+                                    <div class="detail-label">Campaign End</div>
+                                    <div class="detail-value">{client.campaign_end_date || '—'}</div>
+                                </div>
+
+                                <div class="col-6">
+                                    <div class="detail-label">Located In</div>
+                                    <div class="detail-value">{client.located_in || '—'}</div>
+                                </div>
+
+                                {(client.type === 'One Time' || client.type === 'One Time (Repeat)') && (
+                                <div class="col-6">
+                                    <div class="detail-label">Active Month(s)</div>
+                                    <div class="detail-value">
+                                        {activeMonths.length > 0 ? activeMonths.map(m => (
+                                            <span style="display:inline-block;background:rgba(41,41,76,0.08);color:var(--midnight);border-radius:20px;padding:2px 10px;font-size:0.75rem;font-weight:500;margin-right:4px;">{m}</span>
+                                        )) : '—'}
+                                    </div>
+                                </div>
+                                )}
+
+                                <div class="col-6">
+                                    <div class="detail-label">Engagement Score</div>
+                                    <div class="detail-value">
+                                        {client.engagement_score ? (() => {
+                                            const eng = parseInt(client.engagement_score) || 0;
+                                            if (eng >= 70) return <><span style="font-size:1.2rem;font-weight:700;color:#26a387;">{client.engagement_score}</span><span style="font-size:0.72rem;color:#26a387;margin-left:4px;">High</span></>;
+                                            if (eng >= 40) return <><span style="font-size:1.2rem;font-weight:700;color:#c97a30;">{client.engagement_score}</span><span style="font-size:0.72rem;color:#c97a30;margin-left:4px;">Medium</span></>;
+                                            return <><span style="font-size:1.2rem;font-weight:700;color:var(--fit-red);">{client.engagement_score}</span><span style="font-size:0.72rem;color:var(--fit-red);margin-left:4px;">Low</span></>;
+                                        })() : '—'}
+                                    </div>
+                                </div>
+
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+
+            <!-- Contact & Accounts -->
+            <div class="card vfit-card mb-3">
+                <div class="card-header"><i class="bi bi-person-lines-fill me-2" style="color:var(--fit-green);"></i>Contact &amp; Accounts</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-6">
+                            <div class="detail-label">Contact Name</div>
+                            <div class="detail-value">{client.contact_name || '—'}</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">POC Email(s)</div>
+                            <div class="detail-value">
+                                {contactEmails.length > 0 ? contactEmails.map(e => (
+                                    <div class="d-flex align-items-center gap-1 mb-1">
+                                        <i class="bi bi-envelope" style="font-size:0.7rem; color:#aaa;"></i>
+                                        <a href={`mailto:${e}`} style="color:var(--fit-red); font-size:0.85rem;">{e}</a>
+                                    </div>
+                                )) : '—'}
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Dealspoint Account</div>
+                            <div class="detail-value">
+                                {client.dealspoint_account ? (
+                                <span id="copyDpEmail" data-email={client.dealspoint_account}
+                                      title="Click to copy"
+                                      style="cursor:pointer;user-select:none;">{client.dealspoint_account}</span>
+                                ) : '—'}
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Admin Portal</div>
+                            <div class="detail-value">
+                                <a href="https://api.vantagecircle.com/" target="_blank" rel="noopener noreferrer"
+                                   style="color:var(--fit-red);font-size:0.85rem;display:inline-flex;align-items:center;gap:5px;">
+                                    <i class="bi bi-box-arrow-up-right" style="font-size:0.75rem;"></i>
+                                    api.vantagecircle.com
+                                </a>
+                            </div>
+                        </div>
+                        {client.notes && (
+                        <div class="col-12">
+                            <div class="detail-label">Notes</div>
+                            <div class="detail-value">{client.notes}</div>
+                        </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Revenue Summary -->
+            {revSummary.hasAny && (
+            <div class="card vfit-card mb-3" style="border-top:3px solid #0ba882;">
+                <div class="card-header d-flex align-items-center gap-2">
+                    <span style="width:26px;height:26px;border-radius:8px;background:rgba(11,168,130,0.12);display:inline-flex;align-items:center;justify-content:center;">
+                        <i class="bi bi-graph-up-arrow" style="color:#0ba882;font-size:0.8rem;"></i>
+                    </span>
+                    Revenue Summary
+                </div>
+                <div class="card-body p-0">
+
+                    <!-- All-Time -->
+                    <div style="padding:8px 16px 5px; background:#f8f9fb; border-bottom:1px solid #f0f0f5;">
+                        <span style="font-size:0.61rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#aaa;">All-Time Total</span>
+                    </div>
+                    <div class="row g-0" style="border-bottom:1px solid #f0f0f5;">
+                        <div class="col-6" style="padding:12px 18px; border-right:1px solid #f0f0f5;">
+                            <div class="detail-label">Subscription Revenue</div>
+                            {revSummary.totalSub > 0 ? (
+                            <div style="font-size:1.15rem;font-weight:700;color:var(--midnight);margin-top:3px;">
+                                {revSummary.currency} {fmtMoney(revSummary.totalSub)}
+                            </div>
+                            ) : (
+                            <div style="color:#ccc;font-size:0.88rem;margin-top:3px;">—</div>
+                            )}
+                        </div>
+                        <div class="col-6" style="padding:12px 18px;">
+                            <div class="detail-label">Reward Points Revenue</div>
+                            {rpAllEntries.length > 0 ? (
+                            <div style="font-size:1.15rem;font-weight:700;color:#e67e22;margin-top:3px;">
+                                {rpAllEntries.map(({ cur, amt }) => (
+                                <div>{cur} {fmtMoney(amt)}</div>
+                                ))}
+                            </div>
+                            ) : (
+                            <div style="color:#ccc;font-size:0.88rem;margin-top:3px;">—</div>
+                            )}
+                        </div>
+                    </div>
+                    {revSummary.totalSub > 0 && rpAllEntries.length > 0 && rpSingleCur && (
+                    <div style="padding:7px 18px;border-bottom:1px solid #f0f0f5;display:flex;justify-content:flex-end;align-items:center;gap:8px;">
+                        <span style="font-size:0.68rem;color:#aaa;text-transform:uppercase;font-weight:600;">Grand Total</span>
+                        <span style="font-size:1rem;font-weight:700;color:var(--midnight);">{revSummary.currency} {fmtMoney(revSummary.totalAll)}</span>
+                    </div>
+                    )}
+
+                    <!-- Current FY -->
+                    <div style="padding:8px 16px 5px; background:#f8f9fb; border-bottom:1px solid #f0f0f5;">
+                        <span style="font-size:0.61rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#0ba882;">{revSummary.fyLabel} — Current Year</span>
+                    </div>
+                    <div class="row g-0">
+                        <div class="col-6" style="padding:12px 18px; border-right:1px solid #f0f0f5;">
+                            <div class="detail-label">Subscription Revenue</div>
+                            {revSummary.currentSub > 0 ? (
+                            <div style="font-size:1.15rem;font-weight:700;color:#0ba882;margin-top:3px;">
+                                {revSummary.currency} {fmtMoney(revSummary.currentSub)}
+                            </div>
+                            ) : (
+                            <div style="color:#ccc;font-size:0.88rem;margin-top:3px;">—</div>
+                            )}
+                        </div>
+                        <div class="col-6" style="padding:12px 18px;">
+                            <div class="detail-label">Reward Points Revenue</div>
+                            {rpCurEntries.length > 0 ? (
+                            <div style="font-size:1.15rem;font-weight:700;color:#e67e22;margin-top:3px;">
+                                {rpCurEntries.map(({ cur, amt }) => (
+                                <div>{cur} {fmtMoney(amt)}</div>
+                                ))}
+                            </div>
+                            ) : (
+                            <div style="color:#ccc;font-size:0.88rem;margin-top:3px;">—</div>
+                            )}
+                        </div>
+                    </div>
+                    {revSummary.currentSub > 0 && rpCurEntries.length > 0 && rpCurSingleCur && (
+                    <div style="padding:7px 18px;display:flex;justify-content:flex-end;align-items:center;gap:8px;">
+                        <span style="font-size:0.68rem;color:#aaa;text-transform:uppercase;font-weight:600;">{revSummary.fyLabel} Total</span>
+                        <span style="font-size:1rem;font-weight:700;color:#0ba882;">{revSummary.currency} {fmtMoney(revSummary.currentAll)}</span>
+                    </div>
+                    )}
+
+                    <!-- Subscription history breakdown by FY + contributor -->
+                    {subHist.length > 0 && (
+                    <>
+                    <div style="padding:8px 16px 5px; background:#f8f9fb; border-top:1px solid #f0f0f5; border-bottom:1px solid #f0f0f5;">
+                        <span style="font-size:0.61rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#aaa;">Year-by-Year Breakdown</span>
+                    </div>
+                    {subHist.map(row => {
+                        const isCX = (row.contributor || 'Sales') === 'CX';
+                        return (
+                        <div style="display:flex;align-items:center;padding:9px 18px;border-bottom:1px solid #f7f7fa;gap:12px;">
+                            <span style="font-size:0.72rem;font-weight:700;color:#aaa;min-width:70px;">
+                                FY {String(row.financial_year).slice(-2)}-{String(Number(row.financial_year)+1).slice(-2)}
+                            </span>
+                            <span style="font-size:0.85rem;font-weight:600;color:var(--midnight);flex:1;">
+                                {row.currency} {fmtMoney(row.amount)}
+                            </span>
+                            <button
+                                class={`contrib-btn ${isCX ? 'contrib-cx' : 'contrib-sales'}`}
+                                data-sub-id={String(row.id)}
+                                data-client-id={String(clientId)}
+                                data-current={isCX ? 'CX' : 'Sales'}
+                                title="Click to toggle contributor"
+                            >
+                                {isCX
+                                    ? <><i class="bi bi-headset"></i> CX</>
+                                    : <><i class="bi bi-graph-up-arrow"></i> Sales</>
+                                }
+                            </button>
+                        </div>
+                        );
+                    })}
+
+                    {hasSplit && (
+                    <div style="display:flex;gap:0;border-top:2px solid #f0f0f5;">
+                        <div style="flex:1;padding:10px 18px;border-right:1px solid #f0f0f5;">
+                            <div style="font-size:0.6rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#0a7a5e;margin-bottom:3px;">
+                                <i class="bi bi-headset me-1"></i>CX Revenue
+                            </div>
+                            <div style="font-size:0.9rem;font-weight:700;color:#0a7a5e;">
+                                {cxUSD > 0 ? `USD ${fmtMoney(cxUSD)}` : '—'}
+                            </div>
+                        </div>
+                        <div style="flex:1;padding:10px 18px;">
+                            <div style="font-size:0.6rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--midnight);margin-bottom:3px;">
+                                <i class="bi bi-graph-up-arrow me-1"></i>Sales Revenue
+                            </div>
+                            <div style="font-size:0.9rem;font-weight:700;color:var(--midnight);">
+                                {salesUSD > 0 ? `USD ${fmtMoney(salesUSD)}` : '—'}
+                            </div>
+                        </div>
+                    </div>
+                    )}
+
+                    {(subHist as any[]).length > 1 && sparkMax > 0 && (
+                    <div style="padding:12px 18px 14px;border-top:1px solid #f0f0f5;background:#fafafa;">
+                        <div style="font-size:0.6rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#aaa;margin-bottom:8px;">Revenue Trend</div>
+                        <div style="display:flex;align-items:flex-end;gap:6px;height:48px;">
+                            {(subHist as any[]).map((row: any) => {
+                                const usd = _toUSD(row.amount || 0, row.currency || 'USD');
+                                const pct = sparkMax > 0 ? Math.max(8, Math.round((usd / sparkMax) * 100)) : 8;
+                                const isCX = (row.contributor || 'Sales') === 'CX';
+                                return (
+                                <div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:1;max-width:40px;">
+                                    <div style={`width:100%;height:${pct}%;min-height:6px;border-radius:3px 3px 0 0;background:${isCX ? '#0ba882' : '#29294c'};opacity:0.82;`}></div>
+                                    <span style="font-size:0.55rem;color:#aaa;white-space:nowrap;">
+                                        FY{String(row.financial_year).slice(-2)}
+                                    </span>
+                                </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                    )}
+                    </>
+                    )}
+
+                </div>
+            </div>
+            )}
+
+            <!-- Won / Lost tracking — churned clients only -->
+            {client.status === 'Churn' && (
+            <div class="card vfit-card mb-3" style="border-top:3px solid #f15162;">
+                <div class="card-header"><i class="bi bi-person-x-fill me-2" style="color:#f15162;"></i>Churn Record</div>
+                <div class="card-body" style="padding:16px 20px;">
+                    <div style="font-size:0.7rem;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;">Renewal Outcome</div>
+                    <div style="display:flex;gap:8px;margin-bottom:14px;">
+                        <button class="churn-outcome-btn" data-val="Won"
+                            style={`flex:1;padding:7px 12px;border-radius:9px;font-size:0.75rem;font-weight:700;cursor:pointer;border:1.5px solid ${(client as any).churn_outcome === 'Won' ? '#0ba882' : '#e0e0ea'};background:${(client as any).churn_outcome === 'Won' ? 'rgba(11,168,130,0.1)' : '#fafafa'};color:${(client as any).churn_outcome === 'Won' ? '#0a7a5e' : '#9ca3af'};`}>
+                            <i class="bi bi-check-circle-fill me-1"></i>Won back
+                        </button>
+                        <button class="churn-outcome-btn" data-val="Lost"
+                            style={`flex:1;padding:7px 12px;border-radius:9px;font-size:0.75rem;font-weight:700;cursor:pointer;border:1.5px solid ${(client as any).churn_outcome === 'Lost' ? '#f15162' : '#e0e0ea'};background:${(client as any).churn_outcome === 'Lost' ? 'rgba(241,81,98,0.08)' : '#fafafa'};color:${(client as any).churn_outcome === 'Lost' ? '#c0122a' : '#9ca3af'};`}>
+                            <i class="bi bi-x-circle-fill me-1"></i>Lost
+                        </button>
+                        <button class="churn-outcome-btn" data-val=""
+                            style={`flex:1;padding:7px 12px;border-radius:9px;font-size:0.75rem;font-weight:700;cursor:pointer;border:1.5px solid ${!(client as any).churn_outcome ? '#c0c0cc' : '#e0e0ea'};background:${!(client as any).churn_outcome ? 'rgba(150,150,180,0.08)' : '#fafafa'};color:${!(client as any).churn_outcome ? '#6b7280' : '#c0c0cc'};`}>
+                            No attempt
+                        </button>
+                    </div>
+                    <div style="font-size:0.7rem;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Churn Reason</div>
+                    <textarea id="churnReasonInput" rows={2}
+                        placeholder="Why did the client churn? (pricing, product gap, competitor…)"
+                        style="width:100%;padding:8px 12px;border:1.5px solid #e8e8f0;border-radius:9px;font-size:0.8rem;font-family:'Poppins',sans-serif;color:var(--midnight);background:#fafafa;resize:none;outline:none;"
+                    >{(client as any).churn_reason || ''}</textarea>
+                    <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+                        <button id="saveChurnBtn" type="button" style="background:#f15162;color:#fff;border:none;border-radius:8px;padding:5px 16px;font-size:0.75rem;font-weight:600;cursor:pointer;">Save</button>
+                        <span id="churnSaveStatus" style="display:none;font-size:0.7rem;color:#0ba882;font-weight:600;"></span>
+                    </div>
+                </div>
+            </div>
+            )}
+
+            <!-- Agreements -->
+            <div class="card vfit-card mb-3">
+                <div class="card-header d-flex align-items-center justify-content-between">
+                    <span><i class="bi bi-file-earmark-text me-2"></i>Agreements &amp; Documents</span>
+                    <button class="btn-vfit" style="font-size:0.72rem;padding:3px 12px;border:none;"
+                            onclick="document.getElementById('uploadForm').classList.toggle('d-none')">
+                        <i class="bi bi-upload me-1"></i>Upload
+                    </button>
+                </div>
+                <div class="card-body">
+                    <!-- Upload form -->
+                    <form id="uploadForm" method="POST" action={`/api/client/${client.id}/upload-agreement`}
+                          enctype="multipart/form-data" class="d-none mb-3 p-3 rounded"
+                          data-async data-success-msg="Agreement uploaded!"
+                          style="background:#f8f9fb;border:1.5px dashed #dde;">
+                        <div class="row g-2 align-items-end">
+                            <div class="col-md-5">
+                                <label class="detail-label mb-1">File (PDF, DOC, DOCX)</label>
+                                <input type="file" name="file" class="form-control form-control-sm"
+                                       accept=".pdf,.doc,.docx,.xlsx" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="detail-label mb-1">Document Type</label>
+                                <select name="doc_type" class="form-select form-select-sm">
+                                    <option>Agreement</option>
+                                    <option>MSA</option>
+                                    <option>NDA</option>
+                                    <option>Addendum</option>
+                                    <option>Invoice</option>
+                                    <option>Other</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <button class="btn-vfit w-100" style="border:none;padding:6px;">
+                                    <i class="bi bi-upload me-1"></i>Save
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+
+                    {agreements.length > 0 ? (agreements as any[]).map((agr: any) => (
+                        <div class="agr-row d-flex align-items-center gap-3 py-2"
+                             style="border-bottom:1px solid #f0f0f4;">
+                            <div class="agr-icon">
+                                {agr.original_name.endsWith('.pdf') ? (
+                                <i class="bi bi-file-earmark-pdf-fill" style="color:#e74c3c;font-size:1.4rem;"></i>
+                                ) : (
+                                <i class="bi bi-file-earmark-word-fill" style="color:#2b7cd3;font-size:1.4rem;"></i>
+                                )}
+                            </div>
+                            <div style="flex:1;min-width:0;">
+                                <div style="font-size:0.82rem;font-weight:500;color:var(--midnight);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+                                     title={agr.original_name}>
+                                    {agr.original_name}
+                                </div>
+                                <div style="font-size:0.7rem;color:#aaa;">
+                                    <span class="badge" style="background:rgba(41,41,76,0.08);color:var(--steel);font-size:0.65rem;">{agr.doc_type}</span>
+                                    &nbsp;{agr.uploaded_at.slice(0, 10)}
+                                </div>
+                            </div>
+                            <div class="d-flex gap-2 flex-shrink-0">
+                                <a href={`/agreements/${agr.filename}`}
+                                   target="_blank" class="btn-vfit-ghost"
+                                   style="font-size:0.72rem;padding:3px 10px;">
+                                    <i class="bi bi-eye me-1"></i>View
+                                </a>
+                                <form method="POST" action={`/api/agreement/${agr.id}`}
+                                      data-async data-success-msg="Agreement deleted!"
+                                      onsubmit="return confirm('Delete this file?')" style="margin:0;">
+                                    <button class="btn-vfit-ghost"
+                                            style="font-size:0.72rem;padding:3px 10px;color:#dc3545;border-color:#dc3545;">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    )) : (
+                        <div class="text-center py-3" style="color:#bbb;font-size:0.85rem;">
+                            <i class="bi bi-folder2-open" style="font-size:1.5rem;display:block;margin-bottom:6px;"></i>
+                            No documents yet — click Upload to add one.
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <!-- Extra Revenue -->
+            <div class="card vfit-card mb-3">
+                <div class="card-header d-flex align-items-center justify-content-between">
+                    <span><i class="bi bi-plus-circle me-2"></i>Extra Revenue</span>
+                    <button class="btn-vfit" style="font-size:0.72rem;padding:3px 12px;border:none;"
+                            onclick="document.getElementById('extraRevForm').classList.toggle('d-none')">
+                        <i class="bi bi-plus me-1"></i>Add
+                    </button>
+                </div>
+                <div class="card-body">
+                    <!-- Add form -->
+                    <form id="extraRevForm" method="POST"
+                          action={`/api/client/${client.id}/extra-revenue`}
+                          data-async data-reset data-success-msg="Revenue entry added!"
+                          class="d-none mb-3 p-3 rounded"
+                          style="background:#f8f9fb;border:1.5px dashed #dde;">
+                        <div class="row g-2 align-items-end">
+                            <div class="col-md-3">
+                                <label class="detail-label mb-1">Type</label>
+                                <select name="type" class="form-select form-select-sm">
+                                    <option value="Additional Licenses">Additional Licenses</option>
+                                    <option value="Reward Points">Reward Points</option>
+                                    <option value="Customisation">Customisation</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="detail-label mb-1">Financial Year</label>
+                                <select name="financial_year" class="form-select form-select-sm">
+                                    {fyYears.map(yr => (
+                                    <option value={yr} selected={yr === fy}>
+                                        FY {yr - 2000}-{yr - 1999}
+                                    </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="detail-label mb-1">Amount</label>
+                                <input type="number" name="amount" class="form-control form-control-sm"
+                                       step="0.01" min="0" placeholder="e.g. 25000" required>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="detail-label mb-1">Currency</label>
+                                <select name="currency" class="form-select form-select-sm">
+                                    {['INR','USD','EUR','GBP','AED','SGD'].map(cur => (
+                                    <option selected={(client.currency || 'INR') === cur}>{cur}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="detail-label mb-1">Note (optional)</label>
+                                <input type="text" name="description" class="form-control form-control-sm"
+                                       placeholder="e.g. Q2 top-up">
+                            </div>
+                            <div class="col-12 mt-1">
+                                <button class="btn-vfit" style="border:none;padding:5px 18px;font-size:0.8rem;">
+                                    <i class="bi bi-check2 me-1"></i>Save
+                                </button>
+                                <button type="button" class="btn-vfit-outline-dark ms-2"
+                                        style="border-color:#aaa;color:var(--midnight)!important;font-size:0.8rem;padding:5px 14px;"
+                                        onclick="document.getElementById('extraRevForm').classList.add('d-none')">
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+
+                    {extraRevenue.length > 0 ? (
+                    <>
+                    {(extraRevenue as any[]).map((row: any) => (
+                        <div class="agr-row d-flex align-items-center gap-3 py-2"
+                             style="border-bottom:1px solid #f0f0f4;">
+                            <div>
+                                {row.type === 'Additional Licenses' ? (
+                                <i class="bi bi-people-fill" style="color:#4e73df;font-size:1.2rem;"></i>
+                                ) : row.type === 'Customisation' ? (
+                                <i class="bi bi-sliders" style="color:#8e44ad;font-size:1.2rem;"></i>
+                                ) : (
+                                <i class="bi bi-gift-fill" style="color:#e67e22;font-size:1.2rem;"></i>
+                                )}
+                            </div>
+                            <div style="flex:1;min-width:0;">
+                                <div style="font-size:0.82rem;font-weight:600;color:var(--midnight);">
+                                    {row.type}
+                                    {row.description && (
+                                    <span style="font-weight:400;color:#888;font-size:0.75rem;">— {row.description}</span>
+                                    )}
+                                </div>
+                                <div style="font-size:0.72rem;color:#aaa;">
+                                    {row.financial_year
+                                        ? `FY ${row.financial_year - 2000}-${row.financial_year - 1999}`
+                                        : row.created_at.slice(0, 10)}
+                                </div>
+                            </div>
+                            <div style="font-size:0.88rem;font-weight:700;color:#26a387;white-space:nowrap;">
+                                {row.currency} {new Intl.NumberFormat('en-US').format(Math.round(row.amount))}
+                            </div>
+                            <form method="POST" action={`/api/extra-revenue/${row.id}`}
+                                  data-async data-success-msg="Revenue entry removed!"
+                                  onsubmit="return confirm('Remove this entry?')" style="margin:0;">
+                                <button class="btn-vfit-ghost"
+                                        style="font-size:0.72rem;padding:3px 8px;color:#dc3545;border-color:#dc3545;">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </div>
+                    ))}
+                    <div class="d-flex justify-content-end pt-2" style="font-size:0.8rem;color:#888;">
+                        Total extra revenue:
+                        <strong style="color:var(--midnight);margin-left:6px;">
+                            {(extraRevenue as any[])[0].currency} {new Intl.NumberFormat('en-US').format(Math.round(extraTotal))}
+                        </strong>
+                    </div>
+                    </>
+                    ) : (
+                        <div class="text-center py-3" style="color:#bbb;font-size:0.85rem;">
+                            <i class="bi bi-plus-circle" style="font-size:1.5rem;display:block;margin-bottom:6px;"></i>
+                            No extra revenue logged yet.
+                        </div>
+                    )}
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Right: Activity Log -->
+        <div class="col-md-5">
+
+            <!-- Client Timeline -->
+            {tlEvents.length > 0 && (
+            <div class="card vfit-card mb-3">
+                <div class="card-header d-flex align-items-center gap-2">
+                    <span style="width:24px;height:24px;border-radius:7px;background:rgba(11,168,130,0.10);display:inline-flex;align-items:center;justify-content:center;">
+                        <i class="bi bi-clock-history" style="font-size:0.72rem;color:#0ba882;"></i>
+                    </span>
+                    Client Timeline
+                </div>
+                <div class="card-body" style="padding:14px 18px;">
+                    <div class="timeline-wrap">
+                        <div class="timeline-line"></div>
+                        {tlEvents.map((ev: TlEvent) => (
+                        <div class="timeline-item">
+                            <div class={`timeline-dot ${ev.dotClass}`}></div>
+                            <div class="timeline-title">{ev.label}</div>
+                            <div class="timeline-meta">{ev.meta}</div>
+                            {ev.note && <div class="timeline-note">"{ev.note}"</div>}
+                        </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+            )}
+
+            <div class="card vfit-card">
+                <div class="card-header d-flex align-items-center gap-2">
+                    <span style="width:24px;height:24px;border-radius:7px;background:rgba(241,81,98,0.10);display:inline-flex;align-items:center;justify-content:center;">
+                        <i class="bi bi-journal-text" style="font-size:0.72rem;color:var(--fit-red);"></i>
+                    </span>
+                    Activity Log
+                </div>
+                <div class="card-body" style="padding:14px 16px;">
+
+                    <!-- Add activity form -->
+                    <form method="POST" action={`/api/client/${client.id}/note`}
+                          data-async data-reset data-success-msg="Note added!"
+                          class="act-form mb-3">
+                        <div class="act-type-tabs mb-2" id="actTypeTabs">
+                            {['Note','Call','Email','Meeting','Follow-up'].map(t => (
+                            <label class="act-type-tab">
+                                <input type="radio" name="activity_type" value={t} style="display:none;" />
+                                <span>{t}</span>
+                            </label>
+                            ))}
+                        </div>
+                        <textarea name="note" class="act-textarea" rows="3" placeholder="Write a note…" required></textarea>
+                        <button class="act-submit-btn" style="border:none;">
+                            <i class="bi bi-plus me-1"></i>Add Activity
+                        </button>
+                    </form>
+
+                    <div style="height:1px;background:#f0f0f8;margin:0 -4px 12px;"></div>
+
+                    <!-- Activity list -->
+                    {activities.length > 0 ? (
+                    <div class="act-timeline">
+                        {(activities as any[]).map((act: any) => {
+                            const icon  = actIconMap[act.activity_type]  || 'bi-chat';
+                            const color = actColorMap[act.activity_type] || '#888';
+                            const bg    = actBgMap[act.activity_type]    || '#f4f4f8';
+                            return (
+                            <div class="act-item">
+                                <div class="act-icon" style={`background:${bg};color:${color};`}>
+                                    <i class={`bi ${icon}`}></i>
+                                </div>
+                                <div class="act-body">
+                                    <div class="act-meta">
+                                        <span class="act-type-lbl" style={`color:${color};`}>{act.activity_type}</span>
+                                        <span class="act-time">{act.created_at.slice(0, 16).replace('T', ' ')}</span>
+                                    </div>
+                                    <div class="act-text">{act.note}</div>
+                                </div>
+                            </div>
+                            );
+                        })}
+                    </div>
+                    ) : (
+                        <div class="text-center py-3" style="color:#ccc;">
+                            <i class="bi bi-journal" style="font-size:1.8rem;display:block;margin-bottom:6px;"></i>
+                            <span style="font-size:0.82rem;">No activity yet</span>
+                        </div>
+                    )}
+
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script is:inline>
+  // Back destination is set server-side via ?back= param on the URL.
+
+  // pre-select "Note" tab on load
+  document.addEventListener('DOMContentLoaded', function() {
+    const first = document.querySelector('.act-type-tab input[type=radio]');
+    if (first) first.checked = true;
+  });
+
+  // ── Contributor toggle (direct save, no edit form needed) ──────
+  document.querySelectorAll('.contrib-btn').forEach(function(btn) {
+    btn.addEventListener('click', async function() {
+      const subId    = parseInt(this.dataset.subId);
+      const clientId = this.dataset.clientId;
+      const current  = this.dataset.current;
+      const next     = current === 'CX' ? 'Sales' : 'CX';
+
+      this.disabled = true;
+      this.innerHTML = '<i class="bi bi-hourglass-split"></i> …';
+
+      try {
+        const res = await fetch('/api/client/' + clientId + '/set-contributor', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sub_id: subId, contributor: next }),
+        });
+        const json = await res.json();
+        if (!res.ok || json.error) throw new Error(json.error || 'Save failed');
+
+        this.dataset.current = next;
+        if (next === 'CX') {
+          this.className = 'contrib-btn contrib-cx';
+          this.innerHTML = '<i class="bi bi-headset"></i> CX';
+        } else {
+          this.className = 'contrib-btn contrib-sales';
+          this.innerHTML = '<i class="bi bi-graph-up-arrow"></i> Sales';
+        }
+        this.title = 'Saved ✓ — rebuilding (~60s). Click to toggle.';
+      } catch (err) {
+        this.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Error';
+        setTimeout(() => {
+          this.innerHTML = current === 'CX' ? '<i class="bi bi-headset"></i> CX' : '<i class="bi bi-graph-up-arrow"></i> Sales';
+          this.title = 'Click to toggle contributor';
+          this.disabled = false;
+        }, 2000);
+        return;
+      }
+      this.disabled = false;
+    });
+  });
+</script>
+
+<script is:inline>
+(function () {
+  var el = document.getElementById('copyDpEmail');
+  if (!el) return;
+  var email = el.dataset.email;
+  if (!email) return;
+
+  el.addEventListener('click', function () {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(email).catch(function () { execCopy(); });
+    } else {
+      execCopy();
+    }
+  });
+
+  function execCopy() {
+    var ta = document.createElement('textarea');
+    ta.value = email;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:absolute;left:-9999px;top:-9999px;';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (ex) {}
+    document.body.removeChild(ta);
+  }
+})();
+</script>
+
+<style>
+/* ── Incognito hint tooltip ─────────────────────── */
+.incognito-tip {
+    visibility: hidden;
+    opacity: 0;
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    white-space: nowrap;
+    background: #1a2130;
+    color: #e2e8f0;
+    font-size: 0.72rem;
+    font-weight: 500;
+    padding: 6px 10px;
+    border-radius: 7px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.22);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    pointer-events: none;
+    transition: opacity 0.15s, visibility 0.15s;
+    z-index: 50;
+}
+.incognito-tip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 14px;
+    border: 5px solid transparent;
+    border-top-color: #1a2130;
+}
+.incognito-wrap:hover .incognito-tip {
+    visibility: visible;
+    opacity: 1;
+}
+
+/* ── Contributor toggle button ─────────────────── */
+.contrib-btn {
+    display:inline-flex;align-items:center;gap:4px;
+    border-radius:20px;padding:3px 10px;font-size:0.68rem;font-weight:700;
+    border:none;cursor:pointer;transition:opacity 0.15s,transform 0.1s;
+    font-family:inherit;
+}
+.contrib-btn:hover { opacity:0.80;transform:scale(1.05); }
+.contrib-btn:disabled { opacity:0.5;cursor:not-allowed;transform:none; }
+.contrib-sales { background:rgba(41,41,76,0.08);color:var(--midnight); }
+.contrib-cx    { background:rgba(65,216,180,0.12);color:#0a7a5e; }
+
+/* ── Activity form ─────────────────────────────── */
+.act-type-tabs { display:flex; flex-wrap:wrap; gap:5px; }
+.act-type-tab { cursor:pointer; }
+.act-type-tab span {
+    display:inline-block;
+    padding:3px 11px;
+    border:1.5px solid #e8e8f0;
+    border-radius:20px;
+    font-size:0.7rem;
+    font-weight:600;
+    color:#aaa;
+    background:#fafafa;
+    transition:all 0.15s;
+    user-select:none;
+}
+.act-type-tab input:checked + span {
+    border-color:var(--fit-red);
+    background:rgba(241,81,98,0.08);
+    color:var(--fit-red);
+}
+.act-type-tab:hover span { border-color:#d0d0e0; color:var(--midnight); }
+
+.act-textarea {
+    width:100%;
+    padding:9px 12px;
+    border:1.5px solid #e8e8f0;
+    border-radius:10px;
+    font-size:0.82rem;
+    font-family:'Poppins',sans-serif;
+    color:var(--midnight);
+    background:#fafafa;
+    resize:none;
+    outline:none;
+    transition:border-color 0.18s, box-shadow 0.18s;
+    display:block;
+    margin-bottom:8px;
+}
+.act-textarea:focus {
+    border-color:var(--fit-red);
+    background:white;
+    box-shadow:0 0 0 3px rgba(241,81,98,0.08);
+}
+.act-textarea::placeholder { color:#c4c4d4; font-size:0.78rem; }
+
+.act-submit-btn {
+    width:100%;
+    padding:8px;
+    border-radius:10px;
+    background:linear-gradient(90deg,var(--fit-red),var(--fit-red-2));
+    color:white;
+    font-size:0.78rem;
+    font-weight:600;
+    font-family:'Poppins',sans-serif;
+    cursor:pointer;
+    transition:opacity 0.15s;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+}
+.act-submit-btn:hover { opacity:0.88; }
+
+/* ── Activity timeline ─────────────────────────── */
+.act-timeline { display:flex; flex-direction:column; }
+.act-item {
+    display:flex;
+    gap:11px;
+    padding:10px 0;
+    border-bottom:1px solid #f0f0f8;
+}
+.act-item:last-child { border-bottom:none; }
+.act-icon {
+    width:30px; height:30px;
+    border-radius:8px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:0.78rem;
+    flex-shrink:0;
+    margin-top:1px;
+}
+.act-body { flex:1; min-width:0; }
+.act-meta {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:3px;
+}
+.act-type-lbl { font-size:0.63rem; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; }
+.act-time { font-size:0.63rem; color:#bbb; white-space:nowrap; }
+.act-text { font-size:0.8rem; color:var(--midnight); line-height:1.5; }
+</style>
+
+<script is:inline define:vars={{ _rcId: client.id, _rcName: client.company_name, _rcStatus: client.status, _isChurn: client.status === 'Churn', _clientId: client.id }}>
+// ── Track recent visit in localStorage ─────────────────────────────
+(function() {
+  try {
+    var stored = JSON.parse(localStorage.getItem('vfcrm_recent') || '[]');
+    var entry = { id: _rcId, name: _rcName, status: _rcStatus || '' };
+    stored = stored.filter(function(c) { return c.id !== entry.id; });
+    stored.unshift(entry);
+    localStorage.setItem('vfcrm_recent', JSON.stringify(stored.slice(0, 5)));
+  } catch(e) {}
+})();
+
+// ── Won / Lost churn record save ────────────────────────────────────
+if (_isChurn) {
+  var _selectedOutcome = null;
+
+  document.querySelectorAll('.churn-outcome-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      _selectedOutcome = btn.dataset.val || null;
+      document.querySelectorAll('.churn-outcome-btn').forEach(function(b) {
+        var isActive = b.dataset.val === (btn.dataset.val || '');
+        b.style.opacity = isActive ? '1' : '0.5';
+      });
+    });
+  });
+
+  var saveBtn = document.getElementById('saveChurnBtn');
+  var statusEl = document.getElementById('churnSaveStatus');
+  if (saveBtn) saveBtn.addEventListener('click', function() {
+    var reason = (document.getElementById('churnReasonInput').value || '').trim();
+    saveBtn.disabled = true;
+    fetch('/api/client/' + _clientId + '/churn-outcome', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outcome: _selectedOutcome, reason: reason }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      saveBtn.disabled = false;
+      if (statusEl) {
+        statusEl.style.display = 'inline';
+        statusEl.textContent = d.ok ? '✓ Saved' : '✗ ' + (d.error || 'Error');
+        statusEl.style.color = d.ok ? '#0ba882' : '#c9313e';
+        setTimeout(function() { statusEl.style.display = 'none'; }, 3000);
+      }
+    })
+    .catch(function() { saveBtn.disabled = false; });
+  });
+}
+</script>
+
+</BaseLayout>
